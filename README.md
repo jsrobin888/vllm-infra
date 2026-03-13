@@ -115,4 +115,4 @@ See [MASTER_PLAN.md](MASTER_PLAN.md) for the full 66-phase plan.
 
 ## License
 
-Internal use only.
+This project is licensed under the [MIT License](LICENSE).
