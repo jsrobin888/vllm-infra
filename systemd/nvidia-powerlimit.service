@@ -1,0 +1,38 @@
+# =============================================================================
+# Systemd Service: NVIDIA Power Limit Persistence
+# Phase 09: GPU Configuration — Stages 39-42
+# =============================================================================
+# Sets GPU power limits on boot. Installed by gpu_config Ansible role.
+# Install to: /etc/systemd/system/nvidia-powerlimit.service
+# =============================================================================
+
+[Unit]
+Description=Set NVIDIA GPU Power Limits
+After=nvidia-persistenced.service
+Requires=nvidia-persistenced.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Set power limits — customize per GPU type
+# A100-80GB: max 300W, recommend 280W
+# H100-80GB: max 700W, recommend 600W
+ExecStart=/bin/bash -c '\
+    GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader | head -1); \
+    for i in $(seq 0 $((GPU_COUNT - 1))); do \
+        nvidia-smi -i $i -pm 1; \
+        nvidia-smi -i $i -pl ${POWER_LIMIT:-280}; \
+    done'
+
+# Also set compute mode to DEFAULT
+ExecStartPost=/bin/bash -c '\
+    GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader | head -1); \
+    for i in $(seq 0 $((GPU_COUNT - 1))); do \
+        nvidia-smi -i $i -c DEFAULT; \
+    done'
+
+Environment=POWER_LIMIT=280
+
+[Install]
+WantedBy=multi-user.target

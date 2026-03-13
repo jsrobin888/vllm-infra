@@ -1,0 +1,16 @@
+# =============================================================================
+# Systemd Timer: NFS Health Check
+# Runs every 2 minutes
+# =============================================================================
+
+[Unit]
+Description=Run NFS health check every 2 minutes
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=120
+AccuracySec=30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

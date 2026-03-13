@@ -1,0 +1,55 @@
+# =============================================================================
+# Systemd Service: vLLM Server (non-Docker alternative)
+# Phase 18: Container Build — Stages 93-96
+# =============================================================================
+# For deployments that run vLLM directly on the host (without Docker).
+# Install to: /etc/systemd/system/vllm@.service
+# Usage: systemctl start vllm@llama3-8b
+# =============================================================================
+
+[Unit]
+Description=vLLM OpenAI-Compatible Server - %i
+After=network-online.target nvidia-persistenced.service
+Wants=network-online.target
+RequiresMountsFor=/mnt/models
+
+[Service]
+Type=simple
+User=vllm-user
+Group=vllm-user
+
+# Environment
+Environment="VLLM_NO_USAGE_STATS=1"
+Environment="CUDA_DEVICE_MAX_CONNECTIONS=1"
+Environment="TOKENIZERS_PARALLELISM=false"
+EnvironmentFile=-/etc/vllm/%i.env
+
+# Command
+ExecStart=/opt/vllm/venv/bin/python -m vllm.entrypoints.openai.api_server \
+    --config /etc/vllm/%i.yaml
+
+# Resource limits
+LimitMEMLOCK=infinity
+LimitNOFILE=65536
+LimitNPROC=65536
+
+# Restart policy
+Restart=on-failure
+RestartSec=30
+StartLimitBurst=3
+StartLimitIntervalSec=300
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vllm/cache /var/log/vllm
+ReadOnlyPaths=/mnt/models /etc/vllm
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vllm-%i
+
+[Install]
+WantedBy=multi-user.target

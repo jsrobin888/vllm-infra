@@ -1,0 +1,19 @@
+# =============================================================================
+# Systemd Service: NFS Mount Health Check
+# Phase 12: NFS Client — Stages 71-76
+# =============================================================================
+# Periodically checks NFS mount health and auto-remounts if stale.
+# Install to: /etc/systemd/system/nfs-health-check.service
+# Run via: /etc/systemd/system/nfs-health-check.timer
+# =============================================================================
+
+[Unit]
+Description=NFS Mount Health Check and Auto-Recovery
+After=remote-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nfs-health-check.sh
+
+[Install]
+WantedBy=multi-user.target

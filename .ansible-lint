@@ -1,0 +1,24 @@
+# =============================================================================
+# Ansible Lint Configuration
+# =============================================================================
+---
+skip_list:
+  - yaml[line-length]
+  - name[missing]
+  - command-instead-of-shell
+  - no-changed-when
+  - risky-shell-pipe
+
+warn_list:
+  - experimental
+  - role-name
+
+exclude_paths:
+  - .git/
+  - configs/
+  - scripts/
+  - tests/
+  - docs/
+
+use_default_rules: true
+offline: false
