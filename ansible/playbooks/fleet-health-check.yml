@@ -1,0 +1,214 @@
+# =============================================================================
+# Ansible Playbook: Fleet Health Check
+# Phase 54: Operational Readiness — Stages 201-210
+# =============================================================================
+# Non-destructive health check across entire fleet.
+# Generates a summary report of fleet status.
+# =============================================================================
+---
+- name: Fleet Health Check
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Check system uptime
+      ansible.builtin.command: uptime
+      register: uptime_out
+      changed_when: false
+
+    - name: Check disk usage
+      ansible.builtin.command: df -h /
+      register: disk_out
+      changed_when: false
+
+    - name: Check memory usage
+      ansible.builtin.command: free -h
+      register: memory_out
+      changed_when: false
+
+    - name: Check systemd failed units
+      ansible.builtin.command: systemctl --failed --no-pager
+      register: failed_units
+      changed_when: false
+
+    - name: Report node status
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} ===
+          Uptime: {{ uptime_out.stdout }}
+          Disk: {{ disk_out.stdout_lines[-1] }}
+          Memory: {{ memory_out.stdout_lines[1] }}
+          Failed units: {{ failed_units.stdout_lines | length - 1 }}
+
+# --- GPU Runner Specific Checks ---
+- name: GPU Runner Health
+  hosts: gpu_runners
+  become: true
+
+  tasks:
+    - name: Check NVIDIA driver
+      ansible.builtin.command: nvidia-smi --query-gpu=driver_version --format=csv,noheader
+      register: driver_version
+      changed_when: false
+
+    - name: Check GPU status
+      ansible.builtin.command: >
+        nvidia-smi --query-gpu=index,name,temperature.gpu,memory.used,memory.total,utilization.gpu
+        --format=csv,noheader
+      register: gpu_status
+      changed_when: false
+
+    - name: Check GPU ECC errors
+      ansible.builtin.command: >
+        nvidia-smi --query-gpu=ecc.errors.uncorrected.aggregate.total --format=csv,noheader
+      register: ecc_errors
+      changed_when: false
+
+    - name: Check NFS mount
+      ansible.builtin.command: mountpoint /mnt/models
+      register: nfs_mount
+      changed_when: false
+      failed_when: false
+
+    - name: Check Docker containers
+      ansible.builtin.shell: >
+        docker ps --filter "name=vllm" --format "{% raw %}{{.Names}}: {{.Status}}{% endraw %}"
+      register: containers
+      changed_when: false
+
+    - name: Check vLLM health endpoints
+      ansible.builtin.uri:
+        url: "http://localhost:{{ item.port }}/health"
+        timeout: 10
+      loop: "{{ models_to_serve | default([]) }}"
+      register: health_checks
+      failed_when: false
+
+    - name: GPU Runner Report
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} (GPU Runner) ===
+          Driver: {{ driver_version.stdout }}
+          GPUs:
+          {{ gpu_status.stdout }}
+          ECC Errors: {{ ecc_errors.stdout_lines | map('int') | sum }}
+          NFS Mount: {{ 'OK' if nfs_mount.rc == 0 else 'FAILED' }}
+          Containers: {{ containers.stdout }}
+          Health:
+          {% for result in health_checks.results %}
+          - {{ result.item.name }}: {{ 'OK' if result.status == 200 else 'FAIL (' ~ result.status ~ ')' }}
+          {% endfor %}
+
+# --- Storage Server Checks ---
+- name: Storage Server Health
+  hosts: storage_servers
+  become: true
+
+  tasks:
+    - name: Check ZFS pool status
+      ansible.builtin.command: zpool status -x
+      register: zpool_status
+      changed_when: false
+
+    - name: Check ZFS pool usage
+      ansible.builtin.command: zpool list
+      register: zpool_list
+      changed_when: false
+
+    - name: Check NFS exports
+      ansible.builtin.command: exportfs -v
+      register: nfs_exports
+      changed_when: false
+
+    - name: Check NFS connections
+      ansible.builtin.command: ss -tn state established '( dport = :2049 )'
+      register: nfs_connections
+      changed_when: false
+
+    - name: Count model directories
+      ansible.builtin.find:
+        paths: /data/models
+        file_type: directory
+        recurse: false
+      register: model_dirs
+
+    - name: Storage Report
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} (Storage) ===
+          ZFS Status: {{ zpool_status.stdout }}
+          ZFS Pools: {{ zpool_list.stdout }}
+          NFS Exports: {{ nfs_exports.stdout_lines | length }} exports
+          NFS Clients: {{ nfs_connections.stdout_lines | length - 1 }} connections
+          Models: {{ model_dirs.files | length }} model directories
+
+# --- Load Balancer Checks ---
+- name: Load Balancer Health
+  hosts: load_balancers
+  become: true
+
+  tasks:
+    - name: Check HAProxy status
+      ansible.builtin.systemd:
+        name: haproxy
+      register: haproxy_status
+
+    - name: Check HAProxy backends
+      ansible.builtin.shell: |
+        echo "show stat" | socat /var/lib/haproxy/stats/haproxy.sock stdio 2>/dev/null | \
+        grep -E "^backend_" | awk -F',' '{print $1","$2","$18}'
+      register: haproxy_backends
+      changed_when: false
+      failed_when: false
+
+    - name: LB Report
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} (Load Balancer) ===
+          HAProxy: {{ haproxy_status.status.ActiveState }}
+          Backends:
+          {{ haproxy_backends.stdout | default('N/A') }}
+
+# --- Monitoring Checks ---
+- name: Monitoring Health
+  hosts: monitoring
+  become: true
+
+  tasks:
+    - name: Check Prometheus
+      ansible.builtin.uri:
+        url: http://localhost:9090/-/healthy
+        timeout: 10
+      register: prom_health
+      failed_when: false
+
+    - name: Check Grafana
+      ansible.builtin.uri:
+        url: http://localhost:3000/api/health
+        timeout: 10
+      register: grafana_health
+      failed_when: false
+
+    - name: Check Alertmanager
+      ansible.builtin.uri:
+        url: http://localhost:9093/-/healthy
+        timeout: 10
+      register: am_health
+      failed_when: false
+
+    - name: Check Loki
+      ansible.builtin.uri:
+        url: http://localhost:3100/ready
+        timeout: 10
+      register: loki_health
+      failed_when: false
+
+    - name: Monitoring Report
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} (Monitoring) ===
+          Prometheus: {{ 'OK' if prom_health.status == 200 else 'FAIL' }}
+          Grafana: {{ 'OK' if grafana_health.status == 200 else 'FAIL' }}
+          Alertmanager: {{ 'OK' if am_health.status == 200 else 'FAIL' }}
+          Loki: {{ 'OK' if loki_health.status == 200 else 'FAIL' }}

@@ -1,0 +1,168 @@
+---
+# =============================================================================
+# Role: gpu_config
+# Phase 07: NVIDIA GPU Configuration & Tuning (Stages 39–47)
+# =============================================================================
+
+# -- Stage 39: GPU clock configuration --
+- name: "Stage 39 | Query current GPU clocks"
+  shell: |
+    nvidia-smi --query-gpu=clocks.max.graphics,clocks.max.memory --format=csv,noheader
+  register: gpu_clocks
+  changed_when: false
+
+- name: "Stage 39 | Display GPU clock info"
+  debug:
+    msg: "GPU clocks: {{ gpu_clocks.stdout_lines }}"
+
+# -- Stage 40: Power limit configuration --
+- name: "Stage 40 | Set GPU power limits"
+  shell: |
+    nvidia-smi -i {{ item }} -pl {{ gpu_power_limit_watts }}
+  loop: "{{ range(0, gpu_count | int) | list }}"
+  when: gpu_power_limit_enabled | bool
+
+- name: "Stage 40 | Deploy power limit systemd service"
+  template:
+    src: nvidia-powerlimit.service.j2
+    dest: /etc/systemd/system/nvidia-powerlimit.service
+    mode: "0644"
+  when: gpu_power_limit_enabled | bool
+  notify:
+    - reload systemd
+    - enable nvidia-powerlimit
+
+# -- Stage 41: ECC memory check --
+- name: "Stage 41 | Check ECC memory status"
+  shell: |
+    nvidia-smi --query-gpu=ecc.mode.current,ecc.errors.corrected.aggregate.total,ecc.errors.uncorrected.aggregate.total --format=csv,noheader
+  register: ecc_status
+  changed_when: false
+
+- name: "Stage 41 | Display ECC status"
+  debug:
+    msg: "ECC Status: {{ ecc_status.stdout_lines }}"
+
+# -- Stage 42: Compute mode --
+- name: "Stage 42 | Set GPU compute mode"
+  shell: |
+    nvidia-smi -i {{ item }} --compute-mode=DEFAULT
+  loop: "{{ range(0, gpu_count | int) | list }}"
+  changed_when: false
+
+# -- Stage 44: PCIe verification --
+- name: "Stage 44 | Check PCIe link status"
+  shell: |
+    nvidia-smi --query-gpu=pcie.link.gen.current,pcie.link.width.current --format=csv,noheader
+  register: pcie_status
+  changed_when: false
+
+- name: "Stage 44 | Display PCIe status"
+  debug:
+    msg: "PCIe Status: {{ pcie_status.stdout_lines }}"
+
+# -- Stage 45: NUMA affinity --
+- name: "Stage 45 | Document GPU NUMA affinity"
+  shell: |
+    for i in $(seq 0 $(( {{ gpu_count }} - 1 )) ); do
+      echo "GPU $i: NUMA node $(cat /sys/bus/pci/devices/$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader -i $i | tr '[:upper:]' '[:lower:]' | sed 's/^0000://')/numa_node 2>/dev/null || echo 'unknown')"
+    done
+  register: numa_affinity
+  changed_when: false
+  ignore_errors: true
+
+- name: "Stage 45 | Display NUMA affinity"
+  debug:
+    msg: "{{ numa_affinity.stdout_lines | default(['NUMA info not available']) }}"
+
+# -- Stage 46: GPU health check script --
+- name: "Stage 46 | Deploy GPU health check script"
+  copy:
+    content: |
+      #!/bin/bash
+      # GPU Health Check — Stage 46
+      # Validates GPU health for vLLM readiness
+      set -euo pipefail
+
+      ERRORS=0
+
+      echo "=== GPU Health Check ==="
+      echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo ""
+
+      # Check driver loaded
+      if ! nvidia-smi &>/dev/null; then
+        echo "CRITICAL: nvidia-smi failed — driver not loaded"
+        exit 1
+      fi
+
+      # Check each GPU
+      GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader | head -1)
+      echo "GPUs detected: $GPU_COUNT"
+      echo ""
+
+      for i in $(seq 0 $(( GPU_COUNT - 1 )) ); do
+        echo "--- GPU $i ---"
+
+        # Temperature
+        TEMP=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader -i $i)
+        echo "  Temperature: ${TEMP}°C"
+        if [ "$TEMP" -gt 85 ]; then
+          echo "  WARNING: Temperature above 85°C!"
+          ERRORS=$((ERRORS + 1))
+        fi
+
+        # Power
+        POWER=$(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits -i $i | cut -d'.' -f1)
+        POWER_LIMIT=$(nvidia-smi --query-gpu=power.limit --format=csv,noheader,nounits -i $i | cut -d'.' -f1)
+        echo "  Power: ${POWER}W / ${POWER_LIMIT}W limit"
+
+        # Memory
+        MEM_USED=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader -i $i)
+        MEM_TOTAL=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader -i $i)
+        echo "  Memory: $MEM_USED / $MEM_TOTAL"
+
+        # ECC errors
+        ECC_UNCORR=$(nvidia-smi --query-gpu=ecc.errors.uncorrected.aggregate.total --format=csv,noheader -i $i 2>/dev/null || echo "N/A")
+        echo "  ECC uncorrected errors: $ECC_UNCORR"
+        if [ "$ECC_UNCORR" != "N/A" ] && [ "$ECC_UNCORR" != "0" ] && [ "$ECC_UNCORR" != "[N/A]" ]; then
+          echo "  CRITICAL: Uncorrected ECC errors detected!"
+          ERRORS=$((ERRORS + 1))
+        fi
+
+        # Utilization
+        UTIL=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader -i $i)
+        echo "  Utilization: $UTIL"
+
+        echo ""
+      done
+
+      # PCIe check
+      echo "--- PCIe Status ---"
+      nvidia-smi --query-gpu=pcie.link.gen.current,pcie.link.width.current --format=csv -i 0
+      echo ""
+
+      if [ $ERRORS -gt 0 ]; then
+        echo "RESULT: UNHEALTHY ($ERRORS issues found)"
+        exit 1
+      else
+        echo "RESULT: HEALTHY"
+        exit 0
+      fi
+    dest: /opt/vllm/scripts/gpu-health-check.sh
+    mode: "0755"
+
+# -- Stage 47: Thermal monitoring --
+- name: "Stage 47 | Deploy thermal monitoring cron"
+  cron:
+    name: "GPU thermal monitoring"
+    minute: "*/5"
+    job: >
+      nvidia-smi --query-gpu=index,temperature.gpu,power.draw
+      --format=csv,noheader,nounits |
+      while IFS=',' read -r gpu temp power; do
+        if [ "${temp// /}" -gt 80 ]; then
+          logger -t gpu-thermal "WARNING: GPU $gpu temperature ${temp}°C power ${power}W";
+        fi;
+      done
+    user: root

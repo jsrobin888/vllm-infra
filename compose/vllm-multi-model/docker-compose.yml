@@ -1,0 +1,155 @@
+# =============================================================================
+# Docker Compose — Multi-Model vLLM Deployment
+# Phase 18: Container Build — Standalone Template
+# =============================================================================
+# Deploy MULTIPLE models on a single GPU runner, each assigned to
+# different GPU(s). Example: 4-GPU node serving 3 different models.
+# =============================================================================
+
+services:
+  # --- Model 1: Small model on GPU 0 (single GPU) ---
+  vllm-llama3-8b:
+    image: vllm/vllm-openai:v0.8.3
+    container_name: vllm-llama3-8b
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+        limits:
+          cpus: "8"
+          memory: 32G
+    ports:
+      - "8000:8000"
+    volumes:
+      - /mnt/models:/models:ro
+    environment:
+      - VLLM_NO_USAGE_STATS=1
+      - CUDA_DEVICE_MAX_CONNECTIONS=1
+    command: >
+      --model /models/meta-llama--Meta-Llama-3-8B-Instruct
+      --served-model-name llama3-8b
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size 1
+      --max-model-len 8192
+      --gpu-memory-utilization 0.90
+      --dtype auto
+      --enable-prefix-caching
+      --enable-chunked-prefill
+      --max-num-seqs 256
+      --disable-log-requests
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+        tag: "vllm-llama3-8b"
+
+  # --- Model 2: Medium model on GPUs 1-2 (TP=2) ---
+  vllm-mixtral-8x7b:
+    image: vllm/vllm-openai:v0.8.3
+    container_name: vllm-mixtral-8x7b
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1", "2"]
+              capabilities: [gpu]
+        limits:
+          cpus: "16"
+          memory: 64G
+    ports:
+      - "8001:8001"
+    ipc: host
+    shm_size: "8g"
+    volumes:
+      - /mnt/models:/models:ro
+    environment:
+      - VLLM_NO_USAGE_STATS=1
+      - CUDA_DEVICE_MAX_CONNECTIONS=1
+      - NCCL_DEBUG=WARN
+      - NCCL_P2P_DISABLE=0
+      - NCCL_IB_DISABLE=1
+    command: >
+      --model /models/mistralai--Mixtral-8x7B-Instruct-v0.1
+      --served-model-name mixtral-8x7b
+      --host 0.0.0.0
+      --port 8001
+      --tensor-parallel-size 2
+      --max-model-len 32768
+      --gpu-memory-utilization 0.90
+      --dtype auto
+      --enable-prefix-caching
+      --enable-chunked-prefill
+      --max-num-seqs 128
+      --disable-log-requests
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+        tag: "vllm-mixtral-8x7b"
+
+  # --- Model 3: Embedding model on GPU 3 ---
+  vllm-embedding:
+    image: vllm/vllm-openai:v0.8.3
+    container_name: vllm-embedding
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["3"]
+              capabilities: [gpu]
+        limits:
+          cpus: "8"
+          memory: 32G
+    ports:
+      - "8002:8002"
+    volumes:
+      - /mnt/models:/models:ro
+    environment:
+      - VLLM_NO_USAGE_STATS=1
+      - CUDA_DEVICE_MAX_CONNECTIONS=1
+    command: >
+      --model /models/BAAI--bge-large-en-v1.5
+      --served-model-name bge-large
+      --host 0.0.0.0
+      --port 8002
+      --tensor-parallel-size 1
+      --max-model-len 512
+      --gpu-memory-utilization 0.90
+      --dtype auto
+      --max-num-seqs 512
+      --disable-log-requests
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+        tag: "vllm-embedding"

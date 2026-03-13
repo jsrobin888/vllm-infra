@@ -1,0 +1,167 @@
+---
+# =============================================================================
+# vLLM Infrastructure Inventory
+# =============================================================================
+# Copy to hosts.yml and fill in your actual hosts.
+# ansible-vault encrypt group_vars/all/vault.yml for secrets.
+# =============================================================================
+
+all:
+  children:
+    # =========================================================================
+    # GPU Runner Nodes — Stateless compute
+    # =========================================================================
+    gpu_runners:
+      hosts:
+        gpu-runner-01:
+          ansible_host: 10.0.0.11
+          gpu_count: 4
+          gpu_type: "A100-80GB"
+          nvlink: true
+          numa_nodes: 2
+          data_ip: 10.1.0.11            # NFS / data network
+          tensor_parallel_size: 4
+          models_to_serve:
+            - name: "Llama-3.1-70B-Instruct"
+              path: "/mnt/models/meta-llama/Llama-3.1-70B-Instruct/v1"
+              tp_size: 4
+              port: 8000
+              gpu_ids: "0,1,2,3"
+              max_model_len: 4096
+              gpu_memory_utilization: 0.90
+
+        gpu-runner-02:
+          ansible_host: 10.0.0.12
+          gpu_count: 4
+          gpu_type: "A100-80GB"
+          nvlink: true
+          numa_nodes: 2
+          data_ip: 10.1.0.12
+          tensor_parallel_size: 4
+          models_to_serve:
+            - name: "Llama-3.1-70B-Instruct"
+              path: "/mnt/models/meta-llama/Llama-3.1-70B-Instruct/v1"
+              tp_size: 4
+              port: 8000
+              gpu_ids: "0,1,2,3"
+              max_model_len: 4096
+              gpu_memory_utilization: 0.90
+
+        gpu-runner-03:
+          ansible_host: 10.0.0.13
+          gpu_count: 8
+          gpu_type: "H100-80GB"
+          nvlink: true
+          numa_nodes: 2
+          data_ip: 10.1.0.13
+          tensor_parallel_size: 8
+          models_to_serve:
+            - name: "Llama-3.1-70B-Instruct"
+              path: "/mnt/models/meta-llama/Llama-3.1-70B-Instruct/v1"
+              tp_size: 4
+              port: 8000
+              gpu_ids: "0,1,2,3"
+              max_model_len: 8192
+              gpu_memory_utilization: 0.92
+            - name: "Qwen2.5-72B-Instruct"
+              path: "/mnt/models/Qwen/Qwen2.5-72B-Instruct/v1"
+              tp_size: 4
+              port: 8001
+              gpu_ids: "4,5,6,7"
+              max_model_len: 4096
+              gpu_memory_utilization: 0.90
+
+      vars:
+        ansible_python_interpreter: /usr/bin/python3
+
+    # =========================================================================
+    # Model Storage Servers — NFS
+    # =========================================================================
+    storage_servers:
+      hosts:
+        storage-primary:
+          ansible_host: 10.0.0.50
+          data_ip: 10.1.0.50
+          nfs_role: primary
+          storage_disks:
+            - /dev/sdb
+            - /dev/sdc
+            - /dev/sdd
+            - /dev/sde
+          raid_level: raidz2              # ZFS
+          storage_mount: /srv/models
+          storage_capacity_tb: 8
+
+        storage-secondary:
+          ansible_host: 10.0.0.51
+          data_ip: 10.1.0.51
+          nfs_role: secondary
+          storage_disks:
+            - /dev/sdb
+            - /dev/sdc
+            - /dev/sdd
+            - /dev/sde
+          raid_level: raidz2
+          storage_mount: /srv/models
+          storage_capacity_tb: 8
+
+      vars:
+        ansible_python_interpreter: /usr/bin/python3
+
+    # =========================================================================
+    # Load Balancer / API Gateway
+    # =========================================================================
+    load_balancers:
+      hosts:
+        lb-01:
+          ansible_host: 10.0.0.30
+          vip: 10.0.0.100                # Virtual IP (keepalived)
+          role: master
+        lb-02:
+          ansible_host: 10.0.0.31
+          vip: 10.0.0.100
+          role: backup
+
+    # =========================================================================
+    # Monitoring Stack
+    # =========================================================================
+    monitoring:
+      hosts:
+        mon-01:
+          ansible_host: 10.0.0.40
+          prometheus_retention: "30d"
+          prometheus_storage_gb: 200
+          grafana_admin_user: admin
+          loki_retention_days: 30
+
+    # =========================================================================
+    # Control Plane (Ansible controller, Vault, CI runner)
+    # =========================================================================
+    control_plane:
+      hosts:
+        control-01:
+          ansible_host: 10.0.0.5
+          vault_role: primary
+
+  # ===========================================================================
+  # Global Variables
+  # ===========================================================================
+  vars:
+    # Network
+    management_network: "10.0.0.0/24"
+    data_network: "10.1.0.0/24"
+    nfs_server_ip: "10.1.0.50"           # Data network IP of primary NFS
+    nfs_server_secondary_ip: "10.1.0.51"
+    nfs_export_path: "/srv/models"
+    nfs_mount_point: "/mnt/models"
+    dns_servers:
+      - "10.0.0.2"
+      - "10.0.0.3"
+    ntp_servers:
+      - "10.0.0.2"
+      - "ntp.ubuntu.com"
+    domain: "gpu.internal"
+
+    # Global defaults
+    timezone: "UTC"
+    locale: "en_US.UTF-8"

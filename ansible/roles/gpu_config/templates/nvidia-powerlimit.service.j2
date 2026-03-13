@@ -1,0 +1,16 @@
+# NVIDIA GPU Power Limit Service — Stage 40
+# Persists GPU power limits across reboots
+[Unit]
+Description=NVIDIA GPU Power Limit Configuration
+After=nvidia-persistenced.service
+Requires=nvidia-persistenced.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+{% for i in range(gpu_count | int) %}
+ExecStart=/usr/bin/nvidia-smi -i {{ i }} -pl {{ gpu_power_limit_watts }}
+{% endfor %}
+
+[Install]
+WantedBy=multi-user.target

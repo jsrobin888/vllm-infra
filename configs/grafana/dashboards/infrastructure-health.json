@@ -1,0 +1,190 @@
+{
+  "annotations": { "list": [] },
+  "description": "Infrastructure Health — Nodes, Network, Disk, NFS",
+  "editable": true,
+  "panels": [
+    {
+      "title": "Node Up/Down Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "up{job=~\"node-exporter.*\"}", "legendFormat": "{{ instance }}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green" } } },
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } }
+          ]
+        }
+      }
+    },
+    {
+      "title": "CPU Usage by Node (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode='idle'}[5m])) * 100)",
+          "legendFormat": "{{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] }
+        }
+      }
+    },
+    {
+      "title": "Memory Usage by Node (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
+          "legendFormat": "{{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 95 }] }
+        }
+      }
+    },
+    {
+      "title": "Disk Usage (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "(1 - node_filesystem_avail_bytes{fstype!~'tmpfs|overlay'} / node_filesystem_size_bytes{fstype!~'tmpfs|overlay'}) * 100",
+          "legendFormat": "{{ instance }} {{ mountpoint }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100 }
+      }
+    },
+    {
+      "title": "Network Throughput (bytes/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "rate(node_network_receive_bytes_total{device!~'lo|veth.*|docker.*|br-.*'}[5m])",
+          "legendFormat": "RX {{ instance }} {{ device }}"
+        },
+        {
+          "expr": "-rate(node_network_transmit_bytes_total{device!~'lo|veth.*|docker.*|br-.*'}[5m])",
+          "legendFormat": "TX {{ instance }} {{ device }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "Bps" }
+      }
+    },
+    {
+      "title": "Disk I/O Throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "rate(node_disk_read_bytes_total[5m])",
+          "legendFormat": "Read {{ instance }} {{ device }}"
+        },
+        {
+          "expr": "rate(node_disk_written_bytes_total[5m])",
+          "legendFormat": "Write {{ instance }} {{ device }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    },
+    {
+      "title": "NFS Operations/s",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        {
+          "expr": "rate(node_nfs_requests_total[5m])",
+          "legendFormat": "{{ instance }} {{ method }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+    {
+      "title": "System Load Average (1m / 5m / 15m)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        { "expr": "node_load1", "legendFormat": "1m {{ instance }}" },
+        { "expr": "node_load5", "legendFormat": "5m {{ instance }}" },
+        { "expr": "node_load15", "legendFormat": "15m {{ instance }}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "title": "Swap Usage",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "targets": [
+        {
+          "expr": "node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes",
+          "legendFormat": "Swap Used {{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1073741824 }] }
+        }
+      }
+    },
+    {
+      "title": "Docker Containers Running",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 36 },
+      "targets": [
+        {
+          "expr": "engine_daemon_container_states_containers{state='running'}",
+          "legendFormat": "{{ instance }}"
+        }
+      ]
+    },
+    {
+      "title": "Systemd Failed Units",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 36 },
+      "targets": [
+        {
+          "expr": "node_systemd_unit_state{state='failed'}",
+          "legendFormat": "{{ instance }} {{ name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+        }
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["infrastructure", "nodes", "network", "disk", "nfs"],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "type": "query",
+        "query": "label_values(up{job=~'node-exporter.*'}, instance)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "Infrastructure Health",
+  "uid": "infra-health"
+}

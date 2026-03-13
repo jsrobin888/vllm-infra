@@ -1,0 +1,91 @@
+---
+# =============================================================================
+# Global Variables — All Hosts
+# =============================================================================
+# These variables apply to every host in the inventory.
+# Secrets go in vault.yml (ansible-vault encrypted).
+# =============================================================================
+
+# -- Version Pins (from versions.lock) ----------------------------------------
+nvidia_driver_version: "550.90.07"
+nvidia_driver_package: "nvidia-driver-550"
+cuda_version: "12.4"
+cuda_toolkit_package: "cuda-toolkit-12-4"
+nvidia_container_toolkit_version: "1.16.1"
+docker_version: "27.1.1"
+docker_compose_version: "2.29.1"
+vllm_version: "0.8.3"
+vllm_image: "vllm/vllm-openai"
+vllm_image_tag: "v0.8.3"
+python_version: "3.11"
+python_package: "python3.11"
+node_exporter_version: "1.8.2"
+promtail_version: "3.1.0"
+
+# -- System -------------------------------------------------------------------
+timezone: "UTC"
+locale: "en_US.UTF-8"
+ssh_port: 22
+swap_size_mb: 16384
+
+# -- Kernel --------------------------------------------------------------------
+kernel_package: "linux-image-5.15.0-105-generic"
+kernel_headers_package: "linux-headers-5.15.0-105-generic"
+grub_cmdline_extra: "nvidia-drm.modeset=1"    # For GPU persistence
+
+# -- NFS Configuration --------------------------------------------------------
+nfs_server_ip: "10.1.0.50"
+nfs_server_secondary_ip: "10.1.0.51"
+nfs_export_path: "/srv/models"
+nfs_mount_point: "/mnt/models"
+nfs_mount_options: "ro,hard,intr,nfsvers=4.1,rsize=1048576,wsize=1048576,timeo=600,retrans=3"
+
+# -- Docker Configuration -----------------------------------------------------
+docker_data_root: "/data/docker"
+docker_log_driver: "json-file"
+docker_log_max_size: "100m"
+docker_log_max_file: "5"
+docker_default_runtime: "nvidia"              # nvidia as default GPU runtime
+
+# -- vLLM Defaults -------------------------------------------------------------
+vllm_default_dtype: "bfloat16"
+vllm_default_gpu_memory_utilization: 0.90
+vllm_default_max_model_len: 4096
+vllm_default_max_num_seqs: 256
+vllm_default_host: "0.0.0.0"
+vllm_enable_prefix_caching: true
+vllm_enable_chunked_prefill: true
+
+# -- GPU Power Management ------------------------------------------------------
+gpu_power_limit_watts: 300                    # Default power limit per GPU
+gpu_power_limit_enabled: true
+
+# -- Monitoring ----------------------------------------------------------------
+prometheus_server: "10.0.0.40:9090"
+loki_server: "10.0.0.40:3100"
+alertmanager_server: "10.0.0.40:9093"
+grafana_server: "10.0.0.40:3000"
+metrics_scrape_interval: "15s"
+
+# -- Network -------------------------------------------------------------------
+management_network: "10.0.0.0/24"
+data_network: "10.1.0.0/24"
+dns_servers:
+  - "10.0.0.2"
+  - "10.0.0.3"
+ntp_servers:
+  - "10.0.0.2"
+  - "ntp.ubuntu.com"
+
+# -- Security ------------------------------------------------------------------
+fail2ban_maxretry: 5
+fail2ban_bantime: 3600
+audit_log_max_size_mb: 100
+api_rate_limit_rpm: 600                       # Requests per minute per client
+api_rate_limit_concurrent: 50                 # Concurrent requests per client
+
+# -- Paths ---------------------------------------------------------------------
+vllm_base_dir: "/opt/vllm"
+vllm_config_dir: "/opt/vllm/config"
+vllm_log_dir: "/var/log/vllm"
+scripts_dir: "/opt/vllm-infra/scripts"

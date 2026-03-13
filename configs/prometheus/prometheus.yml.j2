@@ -1,0 +1,90 @@
+# =============================================================================
+# Prometheus Configuration — Stage 146
+# =============================================================================
+
+global:
+  scrape_interval: {{ metrics_scrape_interval | default('15s') }}
+  evaluation_interval: 15s
+  external_labels:
+    cluster: vllm-infra
+    environment: production
+
+# Alert rules
+rule_files:
+  - "alert-rules.yml"
+
+# Alertmanager
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "localhost:9093"
+
+# Scrape targets
+scrape_configs:
+  # -- Prometheus self-monitoring --
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # -- Stage 147: Node Exporter (system metrics) --
+  - job_name: node
+    static_configs:
+{% for host in groups['gpu_runners'] %}
+      - targets: ["{{ hostvars[host]['ansible_host'] }}:9100"]
+        labels:
+          instance: "{{ host }}"
+          role: gpu_runner
+          gpu_type: "{{ hostvars[host]['gpu_type'] | default('unknown') }}"
+{% endfor %}
+{% for host in groups['storage_servers'] %}
+      - targets: ["{{ hostvars[host]['ansible_host'] }}:9100"]
+        labels:
+          instance: "{{ host }}"
+          role: storage
+{% endfor %}
+{% for host in groups['load_balancers'] | default([]) %}
+      - targets: ["{{ hostvars[host]['ansible_host'] }}:9100"]
+        labels:
+          instance: "{{ host }}"
+          role: load_balancer
+{% endfor %}
+
+  # -- Stage 148: DCGM GPU Exporter --
+  - job_name: dcgm
+    scrape_interval: 10s
+    static_configs:
+{% for host in groups['gpu_runners'] %}
+      - targets: ["{{ hostvars[host]['ansible_host'] }}:9400"]
+        labels:
+          instance: "{{ host }}"
+          gpu_count: "{{ hostvars[host]['gpu_count'] }}"
+          gpu_type: "{{ hostvars[host]['gpu_type'] | default('unknown') }}"
+{% endfor %}
+
+  # -- Stage 149: vLLM Metrics --
+  - job_name: vllm
+    scrape_interval: 10s
+    metrics_path: /metrics
+    static_configs:
+{% for host in groups['gpu_runners'] %}
+{% for model in hostvars[host]['models_to_serve'] | default([]) %}
+      - targets: ["{{ hostvars[host]['ansible_host'] }}:{{ model.port }}"]
+        labels:
+          instance: "{{ host }}"
+          model: "{{ model.name }}"
+          tp_size: "{{ model.tp_size }}"
+{% endfor %}
+{% endfor %}
+
+  # -- Stage 151: Docker Daemon Metrics --
+  - job_name: docker
+    static_configs:
+{% for host in groups['gpu_runners'] %}
+      - targets: ["{{ hostvars[host]['ansible_host'] }}:9323"]
+        labels:
+          instance: "{{ host }}"
+{% endfor %}
+
+  # -- Stage 150: NFS metrics via node_exporter --
+  # (NFS metrics are automatically collected by node_exporter's nfs collector)

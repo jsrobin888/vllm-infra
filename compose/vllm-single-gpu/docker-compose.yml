@@ -1,0 +1,76 @@
+# =============================================================================
+# Docker Compose — Single GPU vLLM Deployment
+# Phase 18: Container Build — Standalone Template
+# =============================================================================
+# Use this template for deploying a single model on a single GPU.
+# Copy and customize per deployment.
+# =============================================================================
+
+services:
+  vllm-server:
+    image: vllm/vllm-openai:v0.8.3
+    container_name: vllm-single
+    restart: unless-stopped
+
+    # --- GPU Assignment ---
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+        limits:
+          cpus: "8"
+          memory: 32G
+
+    # --- Network ---
+    ports:
+      - "8000:8000"
+    network_mode: host  # Better GPU-to-GPU NCCL performance (optional)
+
+    # --- Model Storage (NFS mount from host) ---
+    volumes:
+      - /mnt/models:/models:ro
+      - vllm-cache:/root/.cache
+
+    # --- Environment ---
+    environment:
+      - VLLM_NO_USAGE_STATS=1
+      - CUDA_DEVICE_MAX_CONNECTIONS=1
+      - TOKENIZERS_PARALLELISM=false
+
+    # --- vLLM Command ---
+    command: >
+      --model /models/meta-llama--Meta-Llama-3-8B-Instruct
+      --served-model-name llama3-8b
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size 1
+      --max-model-len 8192
+      --gpu-memory-utilization 0.90
+      --dtype auto
+      --enable-prefix-caching
+      --enable-chunked-prefill
+      --max-num-seqs 256
+      --disable-log-requests
+
+    # --- Health Check ---
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+    # --- Logging ---
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+        tag: "vllm-single"
+
+volumes:
+  vllm-cache:
+    driver: local

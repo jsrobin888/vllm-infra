@@ -1,0 +1,88 @@
+# =============================================================================
+# .gitignore — vLLM Infrastructure Repository
+# =============================================================================
+
+# --- Ansible Vault files (encrypted secrets) ---
+ansible/group_vars/all/vault.yml
+ansible/group_vars/*/vault.yml
+*.vault.yml
+
+# --- Ansible retry files ---
+*.retry
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+logs/
+
+# --- SSH keys ---
+*.pem
+*.key
+id_rsa
+id_ed25519
+ssh_host_*
+
+# --- TLS certificates ---
+certs/
+*.crt
+*.csr
+!configs/haproxy/*.crt
+
+# --- Terraform state (if used later) ---
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# --- Benchmark results (generated) ---
+benchmark-results/
+/tmp/
+
+# --- Backup files ---
+*.bak
+*.orig
+*.backup
+
+# --- Docker build context ---
+docker/**/context/
+
+# --- Local overrides ---
+ansible/inventory/hosts.yml
+ansible/inventory/hosts_local.yml
+local-*.yml
+*.local
+
+# --- Model files (never commit these) ---
+models/
+*.bin
+*.safetensors
+*.gguf
+*.pt
+*.onnx
+
+# --- Grafana data ---
+grafana-data/
+prometheus-data/
+loki-data/
+alertmanager-data/

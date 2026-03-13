@@ -1,0 +1,102 @@
+# =============================================================================
+# Ansible Playbook: Drain and Decommission GPU Runner
+# Phase 38: Scaling — Stages 117-120
+# =============================================================================
+# Gracefully removes a GPU runner from the fleet.
+# Usage: ansible-playbook playbooks/scale-remove-runner.yml -e "target_host=gpu-runner-02"
+# =============================================================================
+---
+- name: Drain runner from load balancer
+  hosts: load_balancers
+  become: true
+  serial: 1
+
+  tasks:
+    - name: Set runner weight to 0 in HAProxy
+      ansible.builtin.shell: |
+        echo "set server backend_default/{{ target_host }}-{{ item.port }} state drain" | \
+          socat /var/lib/haproxy/stats/haproxy.sock stdio
+      loop: "{{ hostvars[target_host].models_to_serve | default([]) }}"
+      changed_when: true
+
+    - name: Wait for active connections to drain
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          ACTIVE=$(echo "show stat" | socat /var/lib/haproxy/stats/haproxy.sock stdio | \
+            grep "{{ target_host }}" | awk -F',' '{sum += $5} END {print sum}')
+          if [ "$ACTIVE" -eq 0 ] 2>/dev/null; then
+            echo "Drained"
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "Timeout waiting for drain"
+      register: drain_result
+      changed_when: false
+
+    - name: Display drain status
+      ansible.builtin.debug:
+        msg: "Drain status: {{ drain_result.stdout }}"
+
+- name: Stop vLLM on target runner
+  hosts: "{{ target_host }}"
+  become: true
+
+  tasks:
+    - name: Stop vLLM containers
+      ansible.builtin.command: docker compose -f /opt/vllm/docker-compose.yml down
+      args:
+        chdir: /opt/vllm
+      changed_when: true
+
+    - name: Verify containers stopped
+      ansible.builtin.command: docker ps --filter "name=vllm" -q
+      register: remaining
+      changed_when: false
+
+    - name: Assert no vLLM containers running
+      ansible.builtin.assert:
+        that: remaining.stdout == ""
+        fail_msg: "vLLM containers still running!"
+
+    - name: Unmount NFS
+      ansible.posix.mount:
+        path: /mnt/models
+        state: unmounted
+
+    - name: Remove from fstab
+      ansible.posix.mount:
+        path: /mnt/models
+        state: absent
+
+    - name: Stop monitoring agents
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - node_exporter
+      failed_when: false
+
+    - name: Stop DCGM exporter container
+      ansible.builtin.command: docker stop dcgm-exporter
+      failed_when: false
+      changed_when: true
+
+    - name: Report decommission complete
+      ansible.builtin.debug:
+        msg: >
+          {{ inventory_hostname }} has been decommissioned.
+          Remove it from ansible/inventory/hosts.yml and redeploy HAProxy config.
+
+- name: Remove runner from HAProxy config
+  hosts: load_balancers
+  become: true
+  serial: 1
+
+  tasks:
+    - name: Note — Update inventory
+      ansible.builtin.debug:
+        msg: >
+          MANUAL STEP: Remove {{ target_host }} from ansible/inventory/hosts.yml,
+          then run: ansible-playbook playbooks/load-balancer.yml

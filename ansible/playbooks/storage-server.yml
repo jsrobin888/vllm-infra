@@ -1,0 +1,54 @@
+---
+# =============================================================================
+# Playbook: Storage Server Setup
+# Phase 10: NFS Server + ZFS (Stages 62–70, 77–85)
+# =============================================================================
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/storage-server.yml
+# =============================================================================
+
+- name: "Storage Server Provisioning"
+  hosts: storage_servers
+  become: true
+
+  pre_tasks:
+    - name: "Display storage plan"
+      debug:
+        msg: |
+          === Storage Server Setup ===
+          Host:       {{ inventory_hostname }}
+          Role:       {{ nfs_role }}
+          Disks:      {{ storage_disks | join(', ') }}
+          RAID:       {{ raid_level }}
+          Mount:      {{ storage_mount }}
+          Capacity:   {{ storage_capacity_tb }} TB
+          ==============================
+
+  roles:
+    - role: base_system
+      tags: [base, os]
+
+    - role: nfs_server
+      tags: [nfs, storage]
+
+    - role: monitoring_agents
+      tags: [monitoring]
+
+  post_tasks:
+    - name: "Verify ZFS pool"
+      command: zpool status models
+      register: zpool_status
+      changed_when: false
+
+    - name: "Display ZFS pool status"
+      debug:
+        msg: "{{ zpool_status.stdout_lines }}"
+
+    - name: "Verify NFS exports"
+      command: exportfs -v
+      register: nfs_exports
+      changed_when: false
+
+    - name: "Display NFS exports"
+      debug:
+        msg: "{{ nfs_exports.stdout_lines }}"

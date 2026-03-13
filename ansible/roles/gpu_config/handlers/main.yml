@@ -1,0 +1,10 @@
+---
+- name: reload systemd
+  systemd:
+    daemon_reload: true
+
+- name: enable nvidia-powerlimit
+  systemd:
+    name: nvidia-powerlimit
+    enabled: true
+    state: started

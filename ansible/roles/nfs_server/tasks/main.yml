@@ -1,0 +1,135 @@
+---
+# =============================================================================
+# Role: nfs_server
+# Phase 10: Storage Server Setup (Stages 62–70)
+# =============================================================================
+
+# -- Stage 63: Storage disk configuration --
+- name: "Stage 63 | Install ZFS"
+  apt:
+    name:
+      - zfsutils-linux
+      - zfs-dkms
+    state: present
+    update_cache: true
+
+- name: "Stage 63 | Check if ZFS pool exists"
+  command: zpool status models
+  register: zpool_check
+  failed_when: false
+  changed_when: false
+
+- name: "Stage 63 | Create ZFS pool"
+  command: >
+    zpool create -f
+    -o ashift=12
+    -O compression=lz4
+    -O atime=off
+    -O xattr=sa
+    -O recordsize=1M
+    models {{ raid_level }} {{ storage_disks | join(' ') }}
+  when: zpool_check.rc != 0
+
+- name: "Stage 63 | Create models dataset"
+  zfs:
+    name: models/data
+    state: present
+    extra_zfs_properties:
+      mountpoint: "{{ storage_mount }}"
+      quota: "{{ storage_capacity_tb }}T"
+      compression: lz4
+      atime: off
+      recordsize: 1M
+
+# -- Stage 64: NFS server installation --
+- name: "Stage 64 | Install NFS server"
+  apt:
+    name:
+      - nfs-kernel-server
+      - nfs-common
+    state: present
+
+# -- Stage 65: NFS exports --
+- name: "Stage 65 | Configure NFS exports"
+  template:
+    src: exports.j2
+    dest: /etc/exports
+    mode: "0644"
+  notify: reload nfs exports
+
+# -- Stage 67: NFS performance tuning --
+- name: "Stage 67 | Tune NFS server threads"
+  lineinfile:
+    path: /etc/default/nfs-kernel-server
+    regexp: '^RPCNFSDCOUNT='
+    line: 'RPCNFSDCOUNT=32'
+  notify: restart nfs
+
+- name: "Stage 67 | NFS sysctl tuning"
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/91-nfs-server.conf
+    reload: true
+  loop:
+    - { key: "net.core.rmem_max", value: "16777216" }
+    - { key: "net.core.wmem_max", value: "16777216" }
+    - { key: "net.ipv4.tcp_rmem", value: "4096 87380 16777216" }
+    - { key: "net.ipv4.tcp_wmem", value: "4096 65536 16777216" }
+    - { key: "sunrpc.tcp_max_slot_table_entries", value: "128" }
+
+# -- Stage 69: Storage monitoring --
+- name: "Stage 69 | Deploy ZFS health check cron"
+  cron:
+    name: "ZFS pool health check"
+    minute: "*/15"
+    job: >
+      zpool status -x | grep -v "all pools are healthy" &&
+      logger -t zfs-health "WARNING: ZFS pool issue detected" ||
+      true
+    user: root
+
+- name: "Stage 69 | Deploy storage usage monitoring"
+  cron:
+    name: "Storage usage alert"
+    hour: "*/1"
+    minute: "0"
+    job: >
+      USAGE=$(df -h {{ storage_mount }} | awk 'NR==2{print $5}' | tr -d '%');
+      if [ "$USAGE" -gt 80 ]; then
+        logger -t storage-alert "WARNING: Model storage at ${USAGE}% capacity";
+      fi
+    user: root
+
+# -- Stage 70: ZFS snapshots --
+- name: "Stage 70 | Configure nightly ZFS snapshots"
+  cron:
+    name: "ZFS nightly snapshot"
+    hour: "2"
+    minute: "0"
+    job: >
+      zfs snapshot models/data@$(date +%Y%m%d) &&
+      zfs list -t snapshot -o name -H | head -n -14 | xargs -r -n1 zfs destroy
+    user: root
+
+# -- Stage 64: Enable NFS service --
+- name: "Stage 64 | Enable NFS server"
+  systemd:
+    name: nfs-kernel-server
+    enabled: true
+    state: started
+
+# -- Create model directory structure (Stage 77) --
+- name: "Stage 77 | Create model directory structure"
+  file:
+    path: "{{ storage_mount }}/{{ item }}"
+    state: directory
+    mode: "0755"
+    owner: nobody
+    group: nogroup
+  loop:
+    - "meta-llama"
+    - "mistralai"
+    - "Qwen"
+    - "microsoft"
+    - ".registry"

@@ -1,0 +1,97 @@
+# =============================================================================
+# Docker Compose — Multi-GPU vLLM Deployment (Tensor Parallelism)
+# Phase 18: Container Build — Standalone Template
+# =============================================================================
+# Use this template for deploying a single large model across multiple GPUs
+# using tensor parallelism (e.g., Llama-70B on 4x A100).
+# =============================================================================
+
+services:
+  vllm-multi-gpu:
+    image: vllm/vllm-openai:v0.8.3
+    container_name: vllm-multi-gpu
+    restart: unless-stopped
+
+    # --- GPU Assignment: 4 GPUs for TP=4 ---
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0", "1", "2", "3"]
+              capabilities: [gpu]
+        limits:
+          cpus: "32"
+          memory: 128G
+
+    # --- Network ---
+    ports:
+      - "8000:8000"
+
+    # --- IPC for NCCL shared memory ---
+    ipc: host
+
+    # --- Shared memory size for NCCL ---
+    shm_size: "16g"
+
+    # --- Model Storage (NFS mount from host) ---
+    volumes:
+      - /mnt/models:/models:ro
+      - vllm-cache:/root/.cache
+
+    # --- Environment ---
+    environment:
+      # vLLM
+      - VLLM_NO_USAGE_STATS=1
+      - CUDA_DEVICE_MAX_CONNECTIONS=1
+      - TOKENIZERS_PARALLELISM=false
+      # NCCL tuning for multi-GPU
+      - NCCL_DEBUG=WARN
+      - NCCL_P2P_DISABLE=0
+      - NCCL_IB_DISABLE=1
+      - NCCL_SOCKET_IFNAME=eth0
+      - NCCL_SHM_DISABLE=0
+
+    # --- vLLM Command ---
+    command: >
+      --model /models/meta-llama--Meta-Llama-3-70B-Instruct
+      --served-model-name llama3-70b
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size 4
+      --max-model-len 8192
+      --gpu-memory-utilization 0.90
+      --dtype auto
+      --enable-prefix-caching
+      --enable-chunked-prefill
+      --max-num-seqs 128
+      --disable-log-requests
+
+    # --- Health Check ---
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s  # Large models take longer to load
+
+    # --- Logging ---
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+        tag: "vllm-multi-gpu"
+
+    # --- Ulimits for NCCL ---
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+volumes:
+  vllm-cache:
+    driver: local

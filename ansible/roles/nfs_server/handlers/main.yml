@@ -1,0 +1,8 @@
+---
+- name: reload nfs exports
+  command: exportfs -ra
+
+- name: restart nfs
+  systemd:
+    name: nfs-kernel-server
+    state: restarted

@@ -1,0 +1,135 @@
+---
+# =============================================================================
+# Playbook: Model Download
+# Phase 12: Model Registry & Lifecycle (Stages 77–85)
+# =============================================================================
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/model-download.yml \
+#     -e model_id=meta-llama/Llama-3.1-70B-Instruct \
+#     -e model_version=v1
+#   ansible-playbook -i inventory/hosts.yml playbooks/model-download.yml \
+#     -e model_id=Qwen/Qwen2.5-72B-Instruct \
+#     -e model_version=v1 \
+#     -e quantization=awq
+# =============================================================================
+
+- name: "Download Model to Storage Server"
+  hosts: storage_servers
+  become: true
+
+  vars:
+    model_version: "v1"
+    quantization: ""                          # awq, gptq, fp8, or empty for full precision
+    model_provider: "{{ model_id.split('/')[0] }}"
+    model_name: "{{ model_id.split('/')[1] }}"
+    model_target_dir: "{{ storage_mount }}/{{ model_provider }}/{{ model_name }}/{{ model_version }}"
+
+  tasks:
+    - name: "Validate model_id is provided"
+      assert:
+        that:
+          - model_id is defined
+          - model_id | length > 0
+        fail_msg: "model_id is required. Usage: -e model_id=meta-llama/Llama-3.1-70B-Instruct"
+
+    - name: "Display download plan"
+      debug:
+        msg: |
+          === Model Download Plan ===
+          Model:        {{ model_id }}
+          Version:      {{ model_version }}
+          Quantization: {{ quantization | default('none (full precision)') }}
+          Target:       {{ model_target_dir }}
+          ============================
+
+    # Stage 78: Model download automation
+    - name: "Stage 78 | Install HuggingFace CLI"
+      pip:
+        name:
+          - huggingface_hub
+        state: present
+        executable: pip3
+
+    - name: "Stage 78 | Create target directory"
+      file:
+        path: "{{ model_target_dir }}"
+        state: directory
+        mode: "0755"
+        owner: nobody
+        group: nogroup
+
+    - name: "Stage 78 | Login to HuggingFace (for gated models)"
+      shell: |
+        huggingface-cli login --token {{ vault_hf_token }}
+      when: vault_hf_token is defined and vault_hf_token | length > 0
+      no_log: true
+
+    - name: "Stage 78 | Download model"
+      shell: |
+        huggingface-cli download "{{ model_id }}" \
+          --local-dir "{{ model_target_dir }}" \
+          --local-dir-use-symlinks False \
+          {% if quantization | length > 0 %}
+          --revision "{{ quantization }}" \
+          {% endif %}
+          2>&1 | tee /var/log/model-download-{{ model_name }}.log
+      register: download_result
+      async: 7200                             # 2 hour timeout for large models
+      poll: 30
+
+    # Stage 79: Integrity verification
+    - name: "Stage 79 | Generate SHA256 checksums"
+      shell: |
+        cd {{ model_target_dir }} && \
+        find . -type f -name '*.safetensors' -o -name '*.bin' -o -name '*.json' | \
+        sort | xargs sha256sum > {{ model_target_dir }}/.checksums.sha256
+      when: download_result.rc == 0
+
+    # Stage 80: Model version management
+    - name: "Stage 80 | Create model metadata"
+      copy:
+        content: |
+          {
+            "model_id": "{{ model_id }}",
+            "version": "{{ model_version }}",
+            "quantization": "{{ quantization | default('none') }}",
+            "download_date": "{{ ansible_date_time.iso8601 }}",
+            "download_host": "{{ inventory_hostname }}",
+            "path": "{{ model_target_dir }}",
+            "status": "ready"
+          }
+        dest: "{{ model_target_dir }}/.metadata.json"
+        mode: "0644"
+
+    # Stage 81: Update model catalog
+    - name: "Stage 81 | Update model catalog"
+      shell: |
+        CATALOG="{{ storage_mount }}/.registry/catalog.json"
+        # Create catalog if not exists
+        if [ ! -f "$CATALOG" ]; then
+          echo '{"models":[]}' > "$CATALOG"
+        fi
+        # Add/update this model entry
+        jq --arg id "{{ model_id }}" \
+           --arg ver "{{ model_version }}" \
+           --arg quant "{{ quantization | default('none') }}" \
+           --arg path "{{ model_target_dir }}" \
+           --arg date "{{ ansible_date_time.iso8601 }}" \
+           '.models = [.models[] | select(.model_id != $id or .version != $ver)] + [{
+              "model_id": $id,
+              "version": $ver,
+              "quantization": $quant,
+              "path": $path,
+              "download_date": $date,
+              "status": "ready"
+            }]' "$CATALOG" > "${CATALOG}.tmp" && mv "${CATALOG}.tmp" "$CATALOG"
+
+    - name: "Download summary"
+      debug:
+        msg: |
+          === Download Complete ===
+          Model: {{ model_id }}
+          Path:  {{ model_target_dir }}
+          Size:  {{ lookup('pipe', 'du -sh ' + model_target_dir + ' | cut -f1') | default('unknown') }}
+          =========================
+      ignore_errors: true

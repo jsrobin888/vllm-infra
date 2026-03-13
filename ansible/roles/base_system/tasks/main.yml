@@ -1,0 +1,307 @@
+---
+# =============================================================================
+# Role: base_system
+# Phases 04–05: OS Provisioning + Hardening (Stages 15–30)
+# =============================================================================
+
+# -- Stage 17: Kernel pinning --
+- name: "Stage 17 | Pin kernel version"
+  apt:
+    name:
+      - "{{ kernel_package }}"
+      - "{{ kernel_headers_package }}"
+    state: present
+  register: kernel_installed
+
+- name: "Stage 17 | Hold kernel packages"
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - "{{ kernel_package }}"
+    - "{{ kernel_headers_package }}"
+
+# -- Stage 19: Base packages --
+- name: "Stage 19 | Install essential packages"
+  apt:
+    name:
+      - build-essential
+      - curl
+      - wget
+      - git
+      - jq
+      - tmux
+      - htop
+      - iotop
+      - dstat
+      - sysstat
+      - lsof
+      - strace
+      - net-tools
+      - iproute2
+      - iputils-ping
+      - dnsutils
+      - ca-certificates
+      - gnupg
+      - lsb-release
+      - software-properties-common
+      - apt-transport-https
+      - unzip
+      - "{{ python_package }}"
+      - "{{ python_package }}-venv"
+      - "{{ python_package }}-dev"
+      - python3-pip
+      - nfs-common
+      - chrony
+      - auditd
+      - audispd-plugins
+      - apparmor
+      - apparmor-utils
+      - fail2ban
+      - ufw
+      - logrotate
+      - rsyslog
+      - acl
+      - pciutils
+      - dmidecode
+      - smartmontools
+      - nvme-cli
+      - fio
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# -- Stage 20: Users & groups --
+- name: "Stage 20 | Create vllm service group"
+  group:
+    name: vllm
+    system: true
+
+- name: "Stage 20 | Create vllm service user"
+  user:
+    name: vllm-user
+    group: vllm
+    system: true
+    shell: /usr/sbin/nologin
+    home: /opt/vllm
+    create_home: true
+    comment: "vLLM service account"
+
+- name: "Stage 20 | Create monitoring user"
+  user:
+    name: node-exporter
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+# -- Stage 21: Locale & timezone --
+- name: "Stage 21 | Set timezone to UTC"
+  timezone:
+    name: "{{ timezone }}"
+
+- name: "Stage 21 | Set locale"
+  locale_gen:
+    name: "{{ locale }}"
+    state: present
+
+- name: "Stage 21 | Set default locale"
+  copy:
+    content: |
+      LANG={{ locale }}
+      LC_ALL={{ locale }}
+    dest: /etc/default/locale
+    mode: "0644"
+
+# -- Stage 22: SSH hardening --
+- name: "Stage 22 | Harden SSH configuration"
+  copy:
+    content: |
+      # vLLM Infrastructure SSH Hardening — Stage 22
+      Port {{ ssh_port }}
+      Protocol 2
+      HostKey /etc/ssh/ssh_host_ed25519_key
+      HostKey /etc/ssh/ssh_host_rsa_key
+
+      # Authentication
+      PermitRootLogin no
+      PasswordAuthentication no
+      ChallengeResponseAuthentication no
+      PubkeyAuthentication yes
+      AuthorizedKeysFile .ssh/authorized_keys
+      PermitEmptyPasswords no
+      MaxAuthTries 3
+      MaxSessions 10
+      LoginGraceTime 30
+
+      # Security
+      X11Forwarding no
+      AllowAgentForwarding no
+      AllowTcpForwarding no
+      PermitTunnel no
+      UsePAM yes
+
+      # Logging
+      SyslogFacility AUTH
+      LogLevel VERBOSE
+
+      # Keepalive
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+
+      # Restrict to deploy group
+      AllowGroups sudo deploy
+    dest: /etc/ssh/sshd_config
+    mode: "0600"
+    backup: true
+    validate: "sshd -t -f %s"
+  notify: restart sshd
+
+# -- Stage 23: Kernel security parameters --
+- name: "Stage 23 | Apply kernel security sysctl"
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/90-vllm-security.conf
+    reload: true
+  loop:
+    # Network hardening
+    - { key: "net.ipv4.tcp_syncookies", value: "1" }
+    - { key: "net.ipv4.conf.all.rp_filter", value: "1" }
+    - { key: "net.ipv4.conf.default.rp_filter", value: "1" }
+    - { key: "net.ipv4.conf.all.accept_redirects", value: "0" }
+    - { key: "net.ipv4.conf.default.accept_redirects", value: "0" }
+    - { key: "net.ipv4.conf.all.send_redirects", value: "0" }
+    - { key: "net.ipv4.conf.default.send_redirects", value: "0" }
+    - { key: "net.ipv4.icmp_echo_ignore_broadcasts", value: "1" }
+    - { key: "net.ipv4.conf.all.log_martians", value: "1" }
+    - { key: "net.ipv6.conf.all.disable_ipv6", value: "1" }
+    # Kernel hardening
+    - { key: "kernel.randomize_va_space", value: "2" }
+    - { key: "kernel.dmesg_restrict", value: "1" }
+    - { key: "kernel.kptr_restrict", value: "2" }
+    - { key: "fs.suid_dumpable", value: "0" }
+    - { key: "kernel.yama.ptrace_scope", value: "1" }
+    # Performance — NFS & networking
+    - { key: "net.core.rmem_max", value: "16777216" }
+    - { key: "net.core.wmem_max", value: "16777216" }
+    - { key: "net.ipv4.tcp_rmem", value: "4096 87380 16777216" }
+    - { key: "net.ipv4.tcp_wmem", value: "4096 65536 16777216" }
+    - { key: "net.core.netdev_max_backlog", value: "30000" }
+    - { key: "vm.swappiness", value: "10" }
+    - { key: "vm.dirty_ratio", value: "15" }
+    - { key: "vm.dirty_background_ratio", value: "5" }
+    # Huge pages for GPU workloads
+    - { key: "vm.nr_hugepages", value: "0" }       # Set per-host if needed
+
+# -- Stage 25: Automatic security updates --
+- name: "Stage 25 | Configure unattended upgrades"
+  copy:
+    content: |
+      // Auto-install security updates only
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-security";
+      };
+      // Do NOT auto-update kernel or nvidia packages
+      Unattended-Upgrade::Package-Blacklist {
+          "linux-image-*";
+          "linux-headers-*";
+          "nvidia-*";
+          "cuda-*";
+          "libnvidia-*";
+          "docker-*";
+          "containerd*";
+      };
+      Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "false";
+      Unattended-Upgrade::Remove-Unused-Dependencies "false";
+      Unattended-Upgrade::Automatic-Reboot "false";
+      Unattended-Upgrade::Mail "ops@{{ domain }}";
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    mode: "0644"
+
+# -- Stage 26: Audit framework --
+- name: "Stage 26 | Configure auditd rules"
+  copy:
+    content: |
+      # vLLM Infrastructure Audit Rules — Stage 26
+      # Monitor privilege escalation
+      -a always,exit -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=-1 -k privilege_escalation
+      # Monitor Docker socket access
+      -w /var/run/docker.sock -p rwxa -k docker_access
+      # Monitor NVIDIA device access
+      -w /dev/nvidia0 -p rwxa -k gpu_access
+      # Monitor config changes
+      -w /etc/docker/ -p wa -k docker_config
+      -w /etc/nvidia/ -p wa -k nvidia_config
+      -w /opt/vllm/ -p wa -k vllm_config
+      # Monitor SSH keys
+      -w /root/.ssh/ -p wa -k ssh_root
+      -w /home/ -p wa -k ssh_users
+      # Monitor model storage mount
+      -w /mnt/models/ -p r -k model_access
+      # Make the audit config immutable (must be last)
+      -e 2
+    dest: /etc/audit/rules.d/vllm-infra.rules
+    mode: "0640"
+  notify: restart auditd
+
+# -- Stage 24: Fail2Ban --
+- name: "Stage 24 | Configure fail2ban"
+  copy:
+    content: |
+      [DEFAULT]
+      bantime = {{ fail2ban_bantime }}
+      findtime = 600
+      maxretry = {{ fail2ban_maxretry }}
+      backend = systemd
+
+      [sshd]
+      enabled = true
+      port = {{ ssh_port }}
+      filter = sshd
+      logpath = /var/log/auth.log
+      maxretry = 3
+      bantime = 7200
+    dest: /etc/fail2ban/jail.local
+    mode: "0644"
+  notify: restart fail2ban
+
+# -- Stage 29: Login banner --
+- name: "Stage 29 | Set login banner"
+  copy:
+    content: |
+      =========================================================================
+       AUTHORIZED ACCESS ONLY — vLLM GPU Infrastructure
+       All access is logged and monitored.
+       Unauthorized access will be prosecuted.
+      =========================================================================
+    dest: /etc/issue.net
+    mode: "0644"
+
+- name: "Stage 29 | Set MOTD"
+  copy:
+    content: |
+      #!/bin/bash
+      echo "============================================="
+      echo " Host:     $(hostname -f)"
+      echo " IP:       $(hostname -I | awk '{print $1}')"
+      echo " Kernel:   $(uname -r)"
+      echo " GPUs:     $(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -1 || echo 'N/A')"
+      echo " Docker:   $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || echo 'N/A')"
+      echo " vLLM:     $(cat /opt/vllm/VERSION 2>/dev/null || echo 'N/A')"
+      echo " NFS:      $(mountpoint -q /mnt/models && echo 'mounted' || echo 'NOT MOUNTED')"
+      echo "============================================="
+    dest: /etc/update-motd.d/99-vllm-info
+    mode: "0755"
+
+# -- Ensure services are running --
+- name: "Ensure critical services are enabled"
+  systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - chrony
+    - auditd
+    - fail2ban
+    - rsyslog

@@ -1,0 +1,113 @@
+---
+# =============================================================================
+# Playbook: Monitoring Stack
+# Phases 21–25: Prometheus + Grafana + Loki + Alertmanager (Stages 146–175)
+# =============================================================================
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/monitoring-stack.yml
+# =============================================================================
+
+- name: "Deploy Monitoring Stack"
+  hosts: monitoring
+  become: true
+
+  tasks:
+    - name: "Create monitoring directories"
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /opt/monitoring
+        - /opt/monitoring/prometheus
+        - /opt/monitoring/alertmanager
+        - /opt/monitoring/grafana
+        - /opt/monitoring/grafana/provisioning
+        - /opt/monitoring/grafana/provisioning/datasources
+        - /opt/monitoring/grafana/provisioning/dashboards
+        - /opt/monitoring/grafana/dashboards
+        - /opt/monitoring/loki
+        - /data/prometheus
+        - /data/grafana
+        - /data/loki
+        - /data/alertmanager
+
+    - name: "Deploy Prometheus configuration"
+      template:
+        src: "{{ playbook_dir }}/../../configs/prometheus/prometheus.yml.j2"
+        dest: /opt/monitoring/prometheus/prometheus.yml
+        mode: "0644"
+
+    - name: "Deploy Alertmanager configuration"
+      template:
+        src: "{{ playbook_dir }}/../../configs/alertmanager/alertmanager.yml.j2"
+        dest: /opt/monitoring/alertmanager/alertmanager.yml
+        mode: "0644"
+
+    - name: "Deploy Prometheus alert rules"
+      copy:
+        src: "{{ playbook_dir }}/../../configs/prometheus/alert-rules.yml"
+        dest: /opt/monitoring/prometheus/alert-rules.yml
+        mode: "0644"
+
+    - name: "Deploy Loki configuration"
+      copy:
+        src: "{{ playbook_dir }}/../../configs/loki/loki.yml"
+        dest: /opt/monitoring/loki/loki.yml
+        mode: "0644"
+
+    - name: "Deploy Grafana datasource provisioning"
+      copy:
+        src: "{{ playbook_dir }}/../../configs/grafana/datasources.yml"
+        dest: /opt/monitoring/grafana/provisioning/datasources/datasources.yml
+        mode: "0644"
+
+    - name: "Deploy Grafana dashboard provisioning"
+      copy:
+        src: "{{ playbook_dir }}/../../configs/grafana/dashboard-provider.yml"
+        dest: /opt/monitoring/grafana/provisioning/dashboards/dashboards.yml
+        mode: "0644"
+
+    - name: "Deploy Grafana dashboards"
+      copy:
+        src: "{{ item }}"
+        dest: /opt/monitoring/grafana/dashboards/
+        mode: "0644"
+      with_fileglob:
+        - "{{ playbook_dir }}/../../configs/grafana/dashboards/*.json"
+
+    - name: "Deploy monitoring docker-compose"
+      template:
+        src: "{{ playbook_dir }}/../../compose/monitoring/docker-compose.yml.j2"
+        dest: /opt/monitoring/docker-compose.yml
+        mode: "0644"
+
+    - name: "Start monitoring stack"
+      community.docker.docker_compose_v2:
+        project_src: /opt/monitoring
+        state: present
+
+    - name: "Wait for services to be ready"
+      uri:
+        url: "http://localhost:{{ item.port }}{{ item.path }}"
+        method: GET
+        status_code: 200
+        timeout: 10
+      retries: 30
+      delay: 5
+      loop:
+        - { port: 9090, path: "/-/ready", name: "Prometheus" }
+        - { port: 3000, path: "/api/health", name: "Grafana" }
+        - { port: 3100, path: "/ready", name: "Loki" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: "Monitoring stack summary"
+      debug:
+        msg: |
+          === Monitoring Stack Ready ===
+          Prometheus:   http://{{ ansible_host }}:9090
+          Grafana:      http://{{ ansible_host }}:3000 (admin/{{ vault_grafana_admin_password | default('admin') }})
+          Alertmanager: http://{{ ansible_host }}:9093
+          Loki:         http://{{ ansible_host }}:3100
+          ================================

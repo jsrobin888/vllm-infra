@@ -1,0 +1,97 @@
+---
+# =============================================================================
+# Role: nfs_client
+# Phase 11: NFS Client Configuration (Stages 71–76)
+# =============================================================================
+
+# -- Stage 71: NFS client installation --
+- name: "Stage 71 | Install NFS client packages"
+  apt:
+    name:
+      - nfs-common
+      - nfs4-acl-tools
+    state: present
+    update_cache: true
+
+# -- Stage 72: Mount point creation --
+- name: "Stage 72 | Create model mount point"
+  file:
+    path: "{{ nfs_mount_point }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+# -- Stage 73: fstab configuration --
+- name: "Stage 73 | Configure NFS mount in fstab"
+  mount:
+    path: "{{ nfs_mount_point }}"
+    src: "{{ nfs_server_ip }}:{{ nfs_export_path }}"
+    fstype: nfs4
+    opts: "{{ nfs_mount_options }}"
+    state: mounted
+
+# -- Stage 74: Validation --
+- name: "Stage 74 | Verify NFS mount"
+  command: mountpoint -q {{ nfs_mount_point }}
+  register: nfs_mount_check
+  changed_when: false
+
+- name: "Stage 74 | List available models"
+  command: ls -la {{ nfs_mount_point }}/
+  register: nfs_contents
+  changed_when: false
+
+- name: "Stage 74 | Display available models"
+  debug:
+    msg: "{{ nfs_contents.stdout_lines }}"
+
+# -- Stage 76: Mount health monitoring --
+- name: "Stage 76 | Deploy NFS mount health check"
+  copy:
+    content: |
+      #!/bin/bash
+      # NFS Mount Health Check — Stage 76
+      MOUNT_POINT="{{ nfs_mount_point }}"
+
+      if ! mountpoint -q "$MOUNT_POINT"; then
+        logger -t nfs-health "CRITICAL: $MOUNT_POINT is not mounted, attempting remount"
+        mount "$MOUNT_POINT"
+        if ! mountpoint -q "$MOUNT_POINT"; then
+          logger -t nfs-health "CRITICAL: Remount of $MOUNT_POINT FAILED"
+          exit 1
+        fi
+        logger -t nfs-health "INFO: $MOUNT_POINT remounted successfully"
+      fi
+
+      # Check for stale handle
+      if ! timeout 5 ls "$MOUNT_POINT" &>/dev/null; then
+        logger -t nfs-health "CRITICAL: $MOUNT_POINT appears stale, attempting umount+mount"
+        umount -l "$MOUNT_POINT" 2>/dev/null
+        mount "$MOUNT_POINT"
+        if ! timeout 5 ls "$MOUNT_POINT" &>/dev/null; then
+          logger -t nfs-health "CRITICAL: $MOUNT_POINT recovery FAILED"
+          exit 1
+        fi
+        logger -t nfs-health "INFO: $MOUNT_POINT recovered from stale mount"
+      fi
+    dest: /opt/vllm/scripts/nfs-health-check.sh
+    mode: "0755"
+
+- name: "Stage 76 | Schedule NFS health check"
+  cron:
+    name: "NFS mount health check"
+    minute: "*/2"
+    job: "/opt/vllm/scripts/nfs-health-check.sh"
+    user: root
+
+# -- NFS client sysctl tuning --
+- name: "Stage 73 | NFS client sysctl tuning"
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/91-nfs-client.conf
+    reload: true
+  loop:
+    - { key: "sunrpc.tcp_max_slot_table_entries", value: "128" }
+    - { key: "sunrpc.tcp_slot_table_entries", value: "128" }

@@ -1,0 +1,6 @@
+HTTP/1.1 429 Too Many Requests
+Content-Type: application/json
+Connection: close
+Retry-After: 10
+
+{"error":{"message":"Rate limit exceeded. Please retry after 10 seconds.","type":"rate_limit_error","code":429}}

@@ -1,0 +1,45 @@
+---
+# =============================================================================
+# Vault-Encrypted Secrets — EXAMPLE
+# =============================================================================
+# Copy this to vault.yml and encrypt with:
+#   ansible-vault encrypt ansible/group_vars/all/vault.yml
+# =============================================================================
+
+# HuggingFace API token (for gated model downloads)
+vault_hf_token: "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# vLLM API keys (for client authentication)
+vault_vllm_api_keys:
+  - name: "default-client"
+    key: "sk-vllm-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    rate_limit_rpm: 600
+  - name: "high-priority"
+    key: "sk-vllm-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+    rate_limit_rpm: 3000
+  - name: "batch-client"
+    key: "sk-vllm-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+    rate_limit_rpm: 100
+
+# Grafana admin password
+vault_grafana_admin_password: "change-me-in-vault"
+
+# SSH deploy key passphrase (if applicable)
+vault_ssh_key_passphrase: ""
+
+# Slack webhook for alerts
+vault_slack_webhook_url: "https://hooks.slack.com/services/TXXXXXX/BXXXXXX/XXXXXXXXXX"
+
+# PagerDuty integration key
+vault_pagerduty_service_key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Docker registry credentials (if using private registry)
+vault_docker_registry_url: "registry.gpu.internal:5000"
+vault_docker_registry_user: "deploy"
+vault_docker_registry_password: "change-me-in-vault"
+
+# HashiCorp Vault token (for secret management)
+vault_hashicorp_token: "hvs.xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Internal CA private key password
+vault_ca_private_key_password: "change-me-in-vault"

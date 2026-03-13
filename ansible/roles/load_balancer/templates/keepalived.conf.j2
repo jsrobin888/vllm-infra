@@ -1,0 +1,32 @@
+# =============================================================================
+# Keepalived Configuration for HAProxy HA
+# VIP failover between primary and secondary load balancers
+# =============================================================================
+vrrp_script check_haproxy {
+    script "/usr/bin/killall -0 haproxy"
+    interval 2
+    weight 2
+    fall 3
+    rise 2
+}
+
+vrrp_instance VI_VLLM {
+    interface {{ haproxy_vip_interface | default('eth0') }}
+    state {{ 'MASTER' if haproxy_role | default('BACKUP') == 'MASTER' else 'BACKUP' }}
+    virtual_router_id {{ haproxy_vrrp_id | default(51) }}
+    priority {{ haproxy_vrrp_priority | default(100) }}
+    advert_int 1
+
+    authentication {
+        auth_type PASS
+        auth_pass {{ haproxy_vrrp_password | default('changeme') }}
+    }
+
+    virtual_ipaddress {
+        {{ haproxy_vip }}/24
+    }
+
+    track_script {
+        check_haproxy
+    }
+}

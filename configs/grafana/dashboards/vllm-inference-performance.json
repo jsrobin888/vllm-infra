@@ -1,0 +1,230 @@
+{
+  "annotations": { "list": [] },
+  "description": "vLLM Inference Performance — Latency, Throughput, Queue Depth",
+  "editable": true,
+  "panels": [
+    {
+      "title": "Request Throughput (req/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(vllm:request_success_total[5m])) by (instance, model_name)",
+          "legendFormat": "{{ model_name }} @ {{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 15 } }
+      }
+    },
+    {
+      "title": "Token Generation Rate (tokens/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(vllm:generation_tokens_total[5m])) by (instance, model_name)",
+          "legendFormat": "{{ model_name }} @ {{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "tokens/s", "custom": { "lineWidth": 2, "fillOpacity": 15 } }
+      }
+    },
+    {
+      "title": "E2E Request Latency (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le, model_name))",
+          "legendFormat": "p50 {{ model_name }}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le, model_name))",
+          "legendFormat": "p95 {{ model_name }}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le, model_name))",
+          "legendFormat": "p99 {{ model_name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 2 },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 30 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Time to First Token (TTFT) — p50 / p95",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:time_to_first_token_seconds_bucket[5m])) by (le, model_name))",
+          "legendFormat": "p50 TTFT {{ model_name }}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket[5m])) by (le, model_name))",
+          "legendFormat": "p95 TTFT {{ model_name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 10 } }
+      }
+    },
+    {
+      "title": "Active Requests (Queue Depth)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "vllm:num_requests_running",
+          "legendFormat": "Running {{ model_name }} @ {{ instance }}"
+        },
+        {
+          "expr": "vllm:num_requests_waiting",
+          "legendFormat": "Waiting {{ model_name }} @ {{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "none", "custom": { "lineWidth": 2, "fillOpacity": 20, "stacking": { "mode": "normal" } } }
+      }
+    },
+    {
+      "title": "KV Cache Utilization (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "vllm:gpu_cache_usage_perc * 100",
+          "legendFormat": "GPU Cache {{ model_name }} @ {{ instance }}"
+        },
+        {
+          "expr": "vllm:cpu_cache_usage_perc * 100",
+          "legendFormat": "CPU Cache {{ model_name }} @ {{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "lineWidth": 2, "fillOpacity": 15 },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 80 },
+              { "color": "red", "value": 95 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Prefix Cache Hit Rate (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "rate(vllm:prefix_cache_hit_total[5m]) / (rate(vllm:prefix_cache_hit_total[5m]) + rate(vllm:prefix_cache_miss_total[5m])) * 100",
+          "legendFormat": "Hit Rate {{ model_name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100 }
+      }
+    },
+    {
+      "title": "Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(rate(vllm:request_failure_total[5m])) by (model_name)",
+          "legendFormat": "Errors {{ model_name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Tokens per Request (Input vs Output)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prompt_tokens_bucket[5m])) by (le, model_name))",
+          "legendFormat": "Input p50 {{ model_name }}"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:request_generation_tokens_bucket[5m])) by (le, model_name))",
+          "legendFormat": "Output p50 {{ model_name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "none" }
+      }
+    },
+    {
+      "title": "Model Loading Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        {
+          "expr": "vllm:info_model_loaded",
+          "legendFormat": "{{ model_name }} @ {{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "LOADED", "color": "green" } } },
+            { "type": "value", "options": { "0": { "text": "NOT LOADED", "color": "red" } } }
+          ]
+        }
+      }
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "tags": ["vllm", "inference", "llm", "performance"],
+  "templating": {
+    "list": [
+      {
+        "name": "model",
+        "type": "query",
+        "query": "label_values(vllm:num_requests_running, model_name)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "multi": true,
+        "includeAll": true
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "query": "label_values(vllm:num_requests_running, instance)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  },
+  "time": { "from": "now-3h", "to": "now" },
+  "title": "vLLM Inference Performance",
+  "uid": "vllm-inference-perf"
+}

@@ -1,0 +1,84 @@
+---
+# =============================================================================
+# Playbook: Deploy vLLM
+# Phases 14–18: vLLM Container Configuration & Start (Stages 93–132)
+# =============================================================================
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/deploy-vllm.yml
+#   ansible-playbook -i inventory/hosts.yml playbooks/deploy-vllm.yml --limit gpu-runner-01
+#   ansible-playbook -i inventory/hosts.yml playbooks/deploy-vllm.yml -e vllm_image_tag=v0.8.4
+# =============================================================================
+
+- name: "Deploy vLLM Containers"
+  hosts: gpu_runners
+  become: true
+  serial: 1                        # Rolling deploy — one runner at a time
+
+  pre_tasks:
+    - name: "Pre-deploy — Check NFS mount health"
+      command: mountpoint -q {{ nfs_mount_point }}
+      changed_when: false
+
+    - name: "Pre-deploy — Verify model files exist"
+      stat:
+        path: "{{ nfs_mount_point }}/{{ item.path | regex_replace('^/mnt/models/', '') }}"
+      register: model_check
+      loop: "{{ models_to_serve }}"
+
+    - name: "Pre-deploy — Fail if any model missing"
+      assert:
+        that:
+          - item.stat.exists
+        fail_msg: "Model not found: {{ item.item.path }}"
+      loop: "{{ model_check.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: "Pre-deploy — Run GPU health check"
+      script: "{{ vllm_base_dir }}/scripts/gpu-health-check.sh"
+      register: gpu_health
+      changed_when: false
+      failed_when: gpu_health.rc != 0
+      ignore_errors: false
+
+  roles:
+    - role: vllm_deploy
+      tags: [vllm, deploy]
+
+  post_tasks:
+    - name: "Post-deploy — Wait for vLLM containers to become healthy"
+      command: >
+        docker inspect --format='{% raw %}{{.State.Health.Status}}{% endraw %}' vllm-{{ item.name | lower | replace('.', '-') | regex_replace('[^a-z0-9-]', '-') }}
+      register: container_health
+      until: container_health.stdout == "healthy"
+      retries: 30
+      delay: 10
+      loop: "{{ models_to_serve }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: "Post-deploy — Smoke test each model endpoint"
+      uri:
+        url: "http://localhost:{{ item.port }}/v1/models"
+        method: GET
+        return_content: true
+        status_code: 200
+        timeout: 30
+      register: model_endpoints
+      loop: "{{ models_to_serve }}"
+      loop_control:
+        label: "{{ item.name }}:{{ item.port }}"
+
+    - name: "Post-deploy — Summary"
+      debug:
+        msg: |
+          === vLLM Deploy Complete ===
+          Host: {{ inventory_hostname }}
+          {% for model in models_to_serve %}
+          Model: {{ model.name }}
+            Port: {{ model.port }}
+            TP:   {{ model.tp_size }}
+            GPUs: {{ model.gpu_ids }}
+            URL:  http://{{ ansible_host }}:{{ model.port }}/v1/chat/completions
+          {% endfor %}
+          =============================

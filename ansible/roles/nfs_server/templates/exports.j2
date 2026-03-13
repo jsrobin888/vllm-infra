@@ -1,0 +1,11 @@
+# NFS Exports — Stage 65
+# Model storage exported to GPU runners on data network
+# Options: read-only, sync, no subtree check, cross-mount
+
+# Primary export to data network
+{{ storage_mount }}  {{ data_network }}(ro,sync,no_subtree_check,crossmnt,no_root_squash,fsid=0)
+
+# If management network also needs access (for model downloads)
+{% if nfs_role == 'primary' %}
+{{ storage_mount }}  {{ management_network }}(rw,sync,no_subtree_check,crossmnt,no_root_squash,fsid=0)
+{% endif %}

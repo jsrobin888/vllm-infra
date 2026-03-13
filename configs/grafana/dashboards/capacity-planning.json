@@ -1,0 +1,151 @@
+{
+  "annotations": { "list": [] },
+  "description": "Capacity Planning — Trends, projections, resource utilization over time",
+  "editable": true,
+  "panels": [
+    {
+      "title": "GPU Memory Usage Trend (7d)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "avg_over_time(DCGM_FI_DEV_FB_USED[1h]) / (avg_over_time(DCGM_FI_DEV_FB_USED[1h]) + avg_over_time(DCGM_FI_DEV_FB_FREE[1h])) * 100",
+          "legendFormat": "{{ instance }} GPU{{ gpu }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "title": "Request Volume Trend (7d)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(increase(vllm:request_success_total[1h])) by (model_name)",
+          "legendFormat": "{{ model_name }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "lineWidth": 2, "fillOpacity": 15 } } }
+    },
+    {
+      "title": "GPU Utilization Trend (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "avg by(instance) (avg_over_time(DCGM_FI_DEV_GPU_UTIL[1h]))",
+          "legendFormat": "{{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "lineWidth": 2, "fillOpacity": 20 }
+        }
+      }
+    },
+    {
+      "title": "NFS Storage Usage Trend",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "(1 - node_filesystem_avail_bytes{mountpoint='/data'} / node_filesystem_size_bytes{mountpoint='/data'}) * 100",
+          "legendFormat": "{{ instance }} /data"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 85 }] }
+        }
+      }
+    },
+    {
+      "title": "Peak Concurrent Requests (24h windows)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "max_over_time(vllm:num_requests_running[1h]) + max_over_time(vllm:num_requests_waiting[1h])",
+          "legendFormat": "Peak {{ model_name }} @ {{ instance }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "title": "Token Generation Trend (tokens/hour)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(increase(vllm:generation_tokens_total[1h])) by (model_name)",
+          "legendFormat": "{{ model_name }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "title": "Power Consumption Trend (kW total)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(DCGM_FI_DEV_POWER_USAGE) / 1000",
+          "legendFormat": "Total Fleet GPU Power (kW)"
+        },
+        {
+          "expr": "sum(DCGM_FI_DEV_POWER_USAGE) by (instance) / 1000",
+          "legendFormat": "{{ instance }} (kW)"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "kwatt" } }
+    },
+    {
+      "title": "Models Loaded Count",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "expr": "count(count by(model_name) (up{job='vllm'} == 1))",
+          "legendFormat": "Unique Models"
+        }
+      ]
+    },
+    {
+      "title": "Total GPU Hours (cumulative)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 24 },
+      "targets": [
+        {
+          "expr": "count(DCGM_FI_DEV_GPU_TEMP) * (time() - (time() - 86400)) / 3600",
+          "legendFormat": "GPU-Hours (24h)"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "h" } }
+    },
+    {
+      "title": "Latency Trend (p95 by model, hourly avg)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[1h])) by (le, model_name))",
+          "legendFormat": "p95 {{ model_name }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } }
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": ["capacity", "planning", "trends"],
+  "time": { "from": "now-7d", "to": "now" },
+  "title": "Capacity Planning",
+  "uid": "capacity-planning"
+}

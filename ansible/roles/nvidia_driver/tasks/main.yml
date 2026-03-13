@@ -1,0 +1,126 @@
+---
+# =============================================================================
+# Role: nvidia_driver
+# Phase 06: NVIDIA Driver & CUDA Installation (Stages 31–38)
+# =============================================================================
+
+# -- Stage 31: Blacklist nouveau --
+- name: "Stage 31 | Blacklist nouveau driver"
+  copy:
+    content: |
+      blacklist nouveau
+      blacklist lbm-nouveau
+      options nouveau modeset=0
+      alias nouveau off
+      alias lbm-nouveau off
+    dest: /etc/modprobe.d/blacklist-nouveau.conf
+    mode: "0644"
+  register: nouveau_blacklisted
+
+- name: "Stage 31 | Regenerate initramfs"
+  command: update-initramfs -u
+  when: nouveau_blacklisted.changed
+
+# -- Stage 32: Install NVIDIA driver --
+- name: "Stage 32 | Add NVIDIA driver repository key"
+  apt_key:
+    url: "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub"
+    state: present
+
+- name: "Stage 32 | Add NVIDIA CUDA repository"
+  apt_repository:
+    repo: "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /"
+    filename: nvidia-cuda
+    state: present
+    update_cache: true
+
+- name: "Stage 32 | Install NVIDIA driver"
+  apt:
+    name: "{{ nvidia_driver_package }}"
+    state: present
+  register: nvidia_driver_installed
+
+- name: "Stage 32 | Hold NVIDIA driver package"
+  dpkg_selections:
+    name: "{{ nvidia_driver_package }}"
+    selection: hold
+
+# -- Stage 34: CUDA Toolkit --
+- name: "Stage 34 | Install CUDA Toolkit"
+  apt:
+    name: "{{ cuda_toolkit_package }}"
+    state: present
+
+- name: "Stage 34 | Set CUDA environment variables"
+  copy:
+    content: |
+      # CUDA environment — Stage 34
+      export PATH=/usr/local/cuda-{{ cuda_version }}/bin${PATH:+:${PATH}}
+      export LD_LIBRARY_PATH=/usr/local/cuda-{{ cuda_version }}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+      export CUDA_HOME=/usr/local/cuda-{{ cuda_version }}
+    dest: /etc/profile.d/cuda.sh
+    mode: "0644"
+
+- name: "Stage 34 | Set CUDA ldconfig"
+  copy:
+    content: |
+      /usr/local/cuda-{{ cuda_version }}/lib64
+    dest: /etc/ld.so.conf.d/cuda.conf
+    mode: "0644"
+  notify: run ldconfig
+
+# -- Stage 36: NVIDIA persistence daemon --
+- name: "Stage 36 | Enable nvidia-persistenced"
+  systemd:
+    name: nvidia-persistenced
+    enabled: true
+    state: started
+
+# -- Stage 37: Fabric manager (for NVSwitch systems) --
+- name: "Stage 37 | Install NVIDIA Fabric Manager"
+  apt:
+    name: "nvidia-fabricmanager-{{ nvidia_driver_version.split('.')[0] }}"
+    state: present
+  when: gpu_type is defined and gpu_type in ['H100-80GB', 'A100-80GB']
+  ignore_errors: true
+
+- name: "Stage 37 | Enable Fabric Manager"
+  systemd:
+    name: nvidia-fabricmanager
+    enabled: true
+    state: started
+  when: gpu_type is defined and gpu_type in ['H100-80GB', 'A100-80GB']
+  ignore_errors: true
+
+# -- Stage 33: Verification --
+- name: "Stage 33 | Verify NVIDIA driver"
+  command: nvidia-smi
+  register: nvidia_smi_output
+  changed_when: false
+
+- name: "Stage 33 | Display GPU information"
+  debug:
+    msg: "{{ nvidia_smi_output.stdout_lines }}"
+
+- name: "Stage 38 | Check GPU topology"
+  command: nvidia-smi topo -m
+  register: gpu_topology
+  changed_when: false
+
+- name: "Stage 38 | Display GPU topology"
+  debug:
+    msg: "{{ gpu_topology.stdout_lines }}"
+
+# -- Stage 33: Validate all GPUs are visible --
+- name: "Stage 33 | Count visible GPUs"
+  shell: nvidia-smi --query-gpu=count --format=csv,noheader | head -1
+  register: gpu_count_check
+  changed_when: false
+
+- name: "Stage 33 | Validate GPU count matches inventory"
+  assert:
+    that:
+      - gpu_count_check.stdout | int == gpu_count | int
+    fail_msg: "Expected {{ gpu_count }} GPUs but found {{ gpu_count_check.stdout }}!"
+    success_msg: "All {{ gpu_count }} GPUs detected successfully"
+  when: gpu_count is defined

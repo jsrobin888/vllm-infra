@@ -1,0 +1,210 @@
+---
+# =============================================================================
+# Role: vllm_deploy
+# Phases 14–18: vLLM Container Configuration (Stages 94–132)
+# =============================================================================
+
+# -- Create directories --
+- name: "Stage 94 | Create vLLM directories"
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: docker
+  loop:
+    - "{{ vllm_base_dir }}"
+    - "{{ vllm_config_dir }}"
+    - "{{ vllm_log_dir }}"
+    - "{{ vllm_base_dir }}/scripts"
+    - "{{ vllm_base_dir }}/compose"
+
+# -- Stage 94: Deploy Docker Compose per model --
+- name: "Stage 94 | Deploy Docker Compose files"
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ vllm_base_dir }}/compose/docker-compose.yml"
+    mode: "0644"
+  notify: restart vllm containers
+
+# -- Stage 95: Environment files --
+- name: "Stage 95 | Deploy environment files per model"
+  template:
+    src: vllm.env.j2
+    dest: "{{ vllm_base_dir }}/compose/.env"
+    mode: "0600"
+
+# -- Stage 100: Health check script --
+- name: "Stage 100 | Deploy vLLM health check script"
+  copy:
+    content: |
+      #!/bin/bash
+      # vLLM Health Check — Stage 100
+      set -euo pipefail
+
+      ERRORS=0
+      MODELS_FILE="{{ vllm_config_dir }}/active-models.json"
+
+      echo "=== vLLM Health Check ==="
+      echo "Host: $(hostname)"
+      echo "Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo ""
+
+      # Check NFS mount first
+      if ! mountpoint -q {{ nfs_mount_point }}; then
+        echo "CRITICAL: NFS mount {{ nfs_mount_point }} is not available"
+        exit 1
+      fi
+
+      # Check each running vLLM container
+      for container in $(docker ps --filter "name=vllm" --format '{% raw %}{{.Names}}{% endraw %}'); do
+        PORT=$(docker port "$container" 8000 2>/dev/null | cut -d: -f2)
+        if [ -z "$PORT" ]; then
+          echo "WARNING: Container $container has no port mapping"
+          ERRORS=$((ERRORS + 1))
+          continue
+        fi
+
+        # Health endpoint
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+          --max-time 10 "http://localhost:${PORT}/health" 2>/dev/null || echo "000")
+
+        if [ "$HTTP_CODE" = "200" ]; then
+          echo "OK: $container (port $PORT) — healthy"
+        else
+          echo "CRITICAL: $container (port $PORT) — HTTP $HTTP_CODE"
+          ERRORS=$((ERRORS + 1))
+        fi
+
+        # Check model info
+        MODEL_INFO=$(curl -s --max-time 5 "http://localhost:${PORT}/v1/models" 2>/dev/null || echo "")
+        if [ -n "$MODEL_INFO" ]; then
+          echo "  Models: $(echo "$MODEL_INFO" | jq -r '.data[].id' 2>/dev/null || echo 'parse error')"
+        fi
+      done
+
+      echo ""
+      if [ $ERRORS -gt 0 ]; then
+        echo "RESULT: UNHEALTHY ($ERRORS issues)"
+        exit 1
+      else
+        echo "RESULT: ALL HEALTHY"
+        exit 0
+      fi
+    dest: "{{ vllm_base_dir }}/scripts/vllm-health-check.sh"
+    mode: "0755"
+
+# -- Stage 103: Init/pre-flight check --
+- name: "Stage 103 | Deploy pre-flight check script"
+  copy:
+    content: |
+      #!/bin/bash
+      # vLLM Pre-flight Check — Stage 103
+      # Runs before starting vLLM to verify all prerequisites
+      set -euo pipefail
+
+      echo "=== vLLM Pre-flight Check ==="
+      ERRORS=0
+
+      # 1. Check GPU health
+      echo "Checking GPUs..."
+      if ! nvidia-smi &>/dev/null; then
+        echo "FAIL: nvidia-smi not responding"
+        ERRORS=$((ERRORS + 1))
+      else
+        GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader | head -1)
+        echo "  GPUs: $GPU_COUNT detected"
+
+        # Check for critical GPU issues
+        for i in $(seq 0 $((GPU_COUNT - 1))); do
+          TEMP=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader -i $i)
+          if [ "$TEMP" -gt 85 ]; then
+            echo "  FAIL: GPU $i temperature ${TEMP}°C (>85°C)"
+            ERRORS=$((ERRORS + 1))
+          fi
+        done
+      fi
+
+      # 2. Check NFS mount
+      echo "Checking NFS mount..."
+      if ! mountpoint -q {{ nfs_mount_point }}; then
+        echo "  FAIL: {{ nfs_mount_point }} not mounted"
+        ERRORS=$((ERRORS + 1))
+      else
+        echo "  OK: {{ nfs_mount_point }} mounted"
+        # Check read access
+        if ! timeout 5 ls {{ nfs_mount_point }} &>/dev/null; then
+          echo "  FAIL: Cannot read from {{ nfs_mount_point }} (stale?)"
+          ERRORS=$((ERRORS + 1))
+        fi
+      fi
+
+      # 3. Check Docker
+      echo "Checking Docker..."
+      if ! docker info &>/dev/null; then
+        echo "  FAIL: Docker not running"
+        ERRORS=$((ERRORS + 1))
+      else
+        echo "  OK: Docker running"
+      fi
+
+      # 4. Check NVIDIA container runtime
+      echo "Checking NVIDIA container runtime..."
+      if ! docker run --rm --gpus all nvidia/cuda:{{ cuda_version }}.0-base-ubuntu22.04 nvidia-smi &>/dev/null; then
+        echo "  FAIL: GPU not accessible in Docker"
+        ERRORS=$((ERRORS + 1))
+      else
+        echo "  OK: GPU accessible in Docker"
+      fi
+
+      # 5. Check disk space
+      echo "Checking disk space..."
+      ROOT_USAGE=$(df / | awk 'NR==2{print $5}' | tr -d '%')
+      if [ "$ROOT_USAGE" -gt 90 ]; then
+        echo "  FAIL: Root filesystem at ${ROOT_USAGE}%"
+        ERRORS=$((ERRORS + 1))
+      else
+        echo "  OK: Root filesystem at ${ROOT_USAGE}%"
+      fi
+
+      echo ""
+      if [ $ERRORS -gt 0 ]; then
+        echo "PRE-FLIGHT: FAILED ($ERRORS issues)"
+        exit 1
+      else
+        echo "PRE-FLIGHT: PASSED"
+        exit 0
+      fi
+    dest: "{{ vllm_base_dir }}/scripts/preflight-check.sh"
+    mode: "0755"
+
+# -- Stage 103: Run pre-flight check --
+- name: "Stage 103 | Run pre-flight check"
+  command: "{{ vllm_base_dir }}/scripts/preflight-check.sh"
+  register: preflight_result
+  changed_when: false
+
+- name: "Stage 103 | Display pre-flight result"
+  debug:
+    msg: "{{ preflight_result.stdout_lines }}"
+
+# -- Stage 93: Pre-pull vLLM image --
+- name: "Stage 93 | Pull vLLM Docker image"
+  community.docker.docker_image:
+    name: "{{ vllm_image }}:{{ vllm_image_tag }}"
+    source: pull
+    force_source: false
+
+# -- Deploy version marker --
+- name: "Deploy version marker"
+  copy:
+    content: "{{ vllm_version }}"
+    dest: "{{ vllm_base_dir }}/VERSION"
+    mode: "0644"
+
+# -- Start containers --
+- name: "Stage 94 | Start vLLM containers"
+  community.docker.docker_compose_v2:
+    project_src: "{{ vllm_base_dir }}/compose"
+    state: present
+    pull: never

@@ -1,0 +1,75 @@
+# Promtail Configuration — Stage 167
+# Scrapes Docker container logs + system logs, ships to Loki
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://{{ loki_server }}/loki/api/v1/push
+    tenant_id: vllm-infra
+    batchwait: 1s
+    batchsize: 1048576
+
+scrape_configs:
+  # Docker container logs
+  - job_name: docker
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: docker
+          host: {{ inventory_hostname }}
+          __path__: /var/lib/docker/containers/*/*.log
+    pipeline_stages:
+      - json:
+          expressions:
+            stream: stream
+            log: log
+            time: time
+            tag: attrs.tag
+      - labels:
+          stream:
+          tag:
+      - timestamp:
+          source: time
+          format: RFC3339Nano
+      - output:
+          source: log
+
+  # System syslog
+  - job_name: syslog
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: syslog
+          host: {{ inventory_hostname }}
+          __path__: /var/log/syslog
+
+  # Auth log
+  - job_name: authlog
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: authlog
+          host: {{ inventory_hostname }}
+          __path__: /var/log/auth.log
+
+  # vLLM server logs
+  - job_name: vllm
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: vllm
+          host: {{ inventory_hostname }}
+          __path__: {{ vllm_log_dir }}/*.log
+
+  # Kernel / dmesg (GPU errors)
+  - job_name: kernel
+    journal:
+      labels:
+        job: kernel
+        host: {{ inventory_hostname }}
+      path: /run/log/journal

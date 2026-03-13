@@ -1,0 +1,161 @@
+# =============================================================================
+# Ansible Playbook: Security Hardening Audit
+# Phase 42-44: Security — Stages 121-140
+# =============================================================================
+# Run this playbook to verify security posture across all nodes.
+# Non-destructive — only checks, does not modify.
+# =============================================================================
+---
+- name: Security Audit — All Nodes
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    # --- SSH Hardening ---
+    - name: Check SSH root login disabled
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^PermitRootLogin"
+        line: "PermitRootLogin no"
+        state: present
+      check_mode: true
+      register: ssh_root
+      changed_when: false
+
+    - name: Assert SSH root login is disabled
+      ansible.builtin.assert:
+        that: not ssh_root.changed
+        fail_msg: "SSH root login is NOT disabled!"
+        success_msg: "SSH root login disabled ✓"
+
+    - name: Check SSH password auth disabled
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^PasswordAuthentication"
+        line: "PasswordAuthentication no"
+        state: present
+      check_mode: true
+      register: ssh_password
+      changed_when: false
+
+    - name: Assert SSH password auth is disabled
+      ansible.builtin.assert:
+        that: not ssh_password.changed
+        fail_msg: "SSH password authentication is NOT disabled!"
+        success_msg: "SSH password auth disabled ✓"
+
+    # --- Firewall ---
+    - name: Check UFW is active
+      ansible.builtin.command: ufw status
+      register: ufw_status
+      changed_when: false
+
+    - name: Assert UFW is active
+      ansible.builtin.assert:
+        that: "'active' in ufw_status.stdout.lower()"
+        fail_msg: "UFW is NOT active!"
+        success_msg: "UFW active ✓"
+
+    # --- fail2ban ---
+    - name: Check fail2ban is running
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: started
+      check_mode: true
+      register: f2b_status
+
+    - name: Assert fail2ban is running
+      ansible.builtin.assert:
+        that: f2b_status.status.ActiveState == 'active'
+        fail_msg: "fail2ban is NOT running!"
+        success_msg: "fail2ban running ✓"
+
+    # --- Auditd ---
+    - name: Check auditd is running
+      ansible.builtin.systemd:
+        name: auditd
+        state: started
+      check_mode: true
+      register: auditd_status
+
+    - name: Assert auditd is running
+      ansible.builtin.assert:
+        that: auditd_status.status.ActiveState == 'active'
+        fail_msg: "auditd is NOT running!"
+        success_msg: "auditd running ✓"
+
+    # --- Unattended upgrades ---
+    - name: Check unattended-upgrades is installed
+      ansible.builtin.command: dpkg -l unattended-upgrades
+      register: unattended
+      changed_when: false
+      failed_when: false
+
+    - name: Assert unattended-upgrades installed
+      ansible.builtin.assert:
+        that: unattended.rc == 0
+        fail_msg: "unattended-upgrades NOT installed!"
+        success_msg: "unattended-upgrades installed ✓"
+
+    # --- Kernel hardening ---
+    - name: Check kernel parameters
+      ansible.builtin.command: sysctl {{ item.key }}
+      register: sysctl_check
+      changed_when: false
+      loop:
+        - { key: "net.ipv4.ip_forward", expected: "0" }
+        - { key: "net.ipv4.conf.all.send_redirects", expected: "0" }
+        - { key: "kernel.sysrq", expected: "0" }
+      loop_control:
+        label: "{{ item.key }}"
+
+    # --- AppArmor ---
+    - name: Check AppArmor status
+      ansible.builtin.command: aa-status --json
+      register: apparmor_status
+      changed_when: false
+      failed_when: false
+
+    # --- Docker security ---
+    - name: Check Docker no-new-privileges default
+      ansible.builtin.command: docker info --format '{% raw %}{{ .SecurityOptions }}{% endraw %}'
+      register: docker_security
+      changed_when: false
+      when: "'docker_engine' in group_names or 'gpu_runners' in group_names"
+
+    # --- File permissions ---
+    - name: Check sensitive file permissions
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: file_perms
+      loop:
+        - /etc/shadow
+        - /etc/gshadow
+        - /etc/ssh/sshd_config
+
+    - name: Assert shadow file permissions
+      ansible.builtin.assert:
+        that: "item.stat.mode == '0640' or item.stat.mode == '0600'"
+        fail_msg: "{{ item.item }} has insecure permissions: {{ item.stat.mode }}"
+        success_msg: "{{ item.item }} permissions OK ✓"
+      loop: "{{ file_perms.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # --- Open ports ---
+    - name: List listening ports
+      ansible.builtin.command: ss -tlnp
+      register: open_ports
+      changed_when: false
+
+    - name: Display open ports
+      ansible.builtin.debug:
+        msg: "{{ open_ports.stdout_lines }}"
+
+    # --- Summary ---
+    - name: Security audit complete
+      ansible.builtin.debug:
+        msg: >
+          Security audit completed for {{ inventory_hostname }}.
+          Review any FAILED assertions above.

@@ -1,0 +1,54 @@
+# =============================================================================
+# Ansible Playbook: Deploy Load Balancers
+# Phase 28-29: Load Balancing — Stages 141-146
+# =============================================================================
+---
+- name: Deploy HAProxy Load Balancers
+  hosts: load_balancers
+  become: true
+  serial: 1  # Rolling deployment for HA
+
+  pre_tasks:
+    - name: Gather GPU runner facts for backend config
+      ansible.builtin.setup:
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['gpu_runners'] }}"
+
+    - name: Build model list from all runners
+      ansible.builtin.set_fact:
+        vllm_models: >-
+          {{ groups['gpu_runners']
+             | map('extract', hostvars, 'models_to_serve')
+             | flatten
+             | map(attribute='name')
+             | unique
+             | list
+             | map('community.general.dict_kv', 'name')
+             | list }}
+
+  roles:
+    - role: base_system
+      tags: [base]
+    - role: load_balancer
+      tags: [haproxy, lb]
+    - role: monitoring_agents
+      tags: [monitoring]
+
+  post_tasks:
+    - name: Verify HAProxy is serving
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ haproxy_stats_port | default(8404) }}/stats"
+        status_code: [200, 401]
+      retries: 5
+      delay: 5
+
+    - name: Check all backends are registered
+      ansible.builtin.shell: |
+        echo "show stat" | socat /var/lib/haproxy/stats/haproxy.sock stdio | grep -c "UP"
+      register: backend_count
+      changed_when: false
+
+    - name: Report backend status
+      ansible.builtin.debug:
+        msg: "HAProxy has {{ backend_count.stdout }} healthy backends"

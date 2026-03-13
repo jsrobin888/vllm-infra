@@ -1,0 +1,205 @@
+{
+  "annotations": { "list": [] },
+  "description": "GPU Fleet Overview — All runners, all GPUs",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "GPU Count by Runner",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "count(DCGM_FI_DEV_GPU_TEMP) by (instance)",
+          "legendFormat": "{{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "none", "thresholds": { "steps": [{ "color": "green", "value": null }] } }
+      }
+    },
+    {
+      "title": "Total GPUs in Fleet",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 0 },
+      "targets": [
+        { "expr": "count(DCGM_FI_DEV_GPU_TEMP)", "legendFormat": "Total GPUs" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "none", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] } }
+      }
+    },
+    {
+      "title": "GPU Temperature Heatmap",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "DCGM_FI_DEV_GPU_TEMP",
+          "legendFormat": "{{ instance }} GPU{{ gpu }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 75 },
+              { "color": "orange", "value": 85 },
+              { "color": "red", "value": 92 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "GPU Power Draw (W)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "DCGM_FI_DEV_POWER_USAGE",
+          "legendFormat": "{{ instance }} GPU{{ gpu }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "watt", "custom": { "lineWidth": 2, "fillOpacity": 10 } }
+      }
+    },
+    {
+      "title": "GPU Memory Utilization (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "DCGM_FI_DEV_FB_USED / (DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE) * 100",
+          "legendFormat": "{{ instance }} GPU{{ gpu }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "lineWidth": 2, "fillOpacity": 20 },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 80 },
+              { "color": "red", "value": 95 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "GPU Compute Utilization (%)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "DCGM_FI_DEV_GPU_UTIL",
+          "legendFormat": "{{ instance }} GPU{{ gpu }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "lineWidth": 2, "fillOpacity": 20 }
+        }
+      }
+    },
+    {
+      "title": "ECC Errors (Uncorrectable)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "DCGM_FI_DEV_ECC_DBE_AGG_TOTAL",
+          "legendFormat": "{{ instance }} GPU{{ gpu }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "PCIe TX/RX Bandwidth",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        {
+          "expr": "rate(DCGM_FI_DEV_PCIE_TX_THROUGHPUT[5m])",
+          "legendFormat": "TX {{ instance }} GPU{{ gpu }}"
+        },
+        {
+          "expr": "rate(DCGM_FI_DEV_PCIE_RX_THROUGHPUT[5m])",
+          "legendFormat": "RX {{ instance }} GPU{{ gpu }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "Bps", "custom": { "lineWidth": 1, "fillOpacity": 10 } }
+      }
+    },
+    {
+      "title": "NVLink Bandwidth",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        {
+          "expr": "rate(DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL[5m])",
+          "legendFormat": "{{ instance }} GPU{{ gpu }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "Bps", "custom": { "lineWidth": 2 } }
+      }
+    },
+    {
+      "title": "GPU Clock Speeds (MHz)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "targets": [
+        {
+          "expr": "DCGM_FI_DEV_SM_CLOCK",
+          "legendFormat": "SM {{ instance }} GPU{{ gpu }}"
+        },
+        {
+          "expr": "DCGM_FI_DEV_MEM_CLOCK",
+          "legendFormat": "MEM {{ instance }} GPU{{ gpu }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "MHz" }
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["gpu", "fleet", "nvidia", "dcgm"],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "type": "query",
+        "query": "label_values(DCGM_FI_DEV_GPU_TEMP, instance)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "GPU Fleet Overview",
+  "uid": "gpu-fleet-overview"
+}

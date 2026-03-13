@@ -1,0 +1,159 @@
+{
+  "annotations": { "list": [] },
+  "description": "Model Serving Dashboard — Per-model metrics, health, and capacity",
+  "editable": true,
+  "panels": [
+    {
+      "title": "Model Health Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "up{job='vllm'}",
+          "legendFormat": "{{ model_name }} @ {{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "SERVING", "color": "green" } } },
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Requests Per Second by Model",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "sum(rate(vllm:request_success_total{model_name=~\"$model\"}[5m])) by (model_name)",
+          "legendFormat": "{{ model_name }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 20 } } }
+    },
+    {
+      "title": "GPU Memory per Model (GiB)",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "DCGM_FI_DEV_FB_USED / 1024",
+          "legendFormat": "GPU{{ gpu }} @ {{ instance }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "gibibytes", "min": 0, "max": 80 } }
+    },
+    {
+      "title": "Active vs Waiting Requests by Model",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "vllm:num_requests_running{model_name=~\"$model\"}",
+          "legendFormat": "Running {{ model_name }}"
+        },
+        {
+          "expr": "vllm:num_requests_waiting{model_name=~\"$model\"}",
+          "legendFormat": "Waiting {{ model_name }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "fillOpacity": 30, "stacking": { "mode": "normal" } } } }
+    },
+    {
+      "title": "Average Tokens Generated per Request",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "rate(vllm:generation_tokens_total{model_name=~\"$model\"}[5m]) / rate(vllm:request_success_total{model_name=~\"$model\"}[5m])",
+          "legendFormat": "{{ model_name }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" } }
+    },
+    {
+      "title": "KV Cache Usage by Model (%)",
+      "type": "gauge",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "vllm:gpu_cache_usage_perc{model_name=~\"$model\"} * 100",
+          "legendFormat": "{{ model_name }} @ {{ instance }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 95 }] }
+        }
+      }
+    },
+    {
+      "title": "Model Serving Instances Count",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        {
+          "expr": "count(up{job='vllm', model_name=~\"$model\"} == 1) by (model_name)",
+          "legendFormat": "{{ model_name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "none", "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 1 }, { "color": "green", "value": 2 }] } }
+      }
+    },
+    {
+      "title": "TTFT by Model (p50/p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:time_to_first_token_seconds_bucket{model_name=~\"$model\"}[5m])) by (le, model_name))",
+          "legendFormat": "p50 {{ model_name }}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket{model_name=~\"$model\"}[5m])) by (le, model_name))",
+          "legendFormat": "p95 {{ model_name }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Inter-Token Latency by Model (p50/p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:inter_token_latency_seconds_bucket{model_name=~\"$model\"}[5m])) by (le, model_name))",
+          "legendFormat": "p50 ITL {{ model_name }}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:inter_token_latency_seconds_bucket{model_name=~\"$model\"}[5m])) by (le, model_name))",
+          "legendFormat": "p95 ITL {{ model_name }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "tags": ["vllm", "models", "serving"],
+  "templating": {
+    "list": [
+      {
+        "name": "model",
+        "type": "query",
+        "query": "label_values(vllm:num_requests_running, model_name)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  },
+  "time": { "from": "now-3h", "to": "now" },
+  "title": "Model Serving Dashboard",
+  "uid": "model-serving"
+}

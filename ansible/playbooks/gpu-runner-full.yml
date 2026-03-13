@@ -1,0 +1,92 @@
+---
+# =============================================================================
+# Playbook: GPU Runner Full Provisioning
+# Phases 04–09, 11: Complete runner from bare Ubuntu 22.04 to vLLM-ready
+# Stages: 15–61, 71–76
+# =============================================================================
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/gpu-runner-full.yml
+#   ansible-playbook -i inventory/hosts.yml playbooks/gpu-runner-full.yml --limit gpu-runner-01
+# =============================================================================
+
+- name: "GPU Runner Full Provisioning"
+  hosts: gpu_runners
+  become: true
+  serial: "{{ serial_count | default('100%') }}"
+
+  pre_tasks:
+    - name: "Validate target is Ubuntu 22.04"
+      assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_version is version('22.04', '>=')
+        fail_msg: "This playbook requires Ubuntu 22.04+. Found: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+    - name: "Display provisioning plan"
+      debug:
+        msg: |
+          === GPU Runner Provisioning Plan ===
+          Host:       {{ inventory_hostname }}
+          IP:         {{ ansible_host }}
+          GPUs:       {{ gpu_count }} × {{ gpu_type }}
+          NVLink:     {{ nvlink | default('unknown') }}
+          NFS:        {{ nfs_server_ip }}:{{ nfs_export_path }} → {{ nfs_mount_point }}
+          Power Cap:  {{ gpu_power_limit_watts }}W per GPU
+          Models:     {{ models_to_serve | map(attribute='name') | list | join(', ') }}
+          ============================================
+
+  roles:
+    # Phase 04–05: OS base + hardening (Stages 15–30)
+    - role: base_system
+      tags: [base, os, hardening]
+
+    # Phase 06: NVIDIA driver + CUDA (Stages 31–38)
+    - role: nvidia_driver
+      tags: [nvidia, driver, cuda]
+
+    # Phase 07: GPU configuration + tuning (Stages 39–47)
+    - role: gpu_config
+      tags: [nvidia, gpu, tuning, power]
+
+    # Phase 08: Docker engine (Stages 48–54)
+    - role: docker_engine
+      tags: [docker]
+
+    # Phase 09: NVIDIA container toolkit (Stages 55–61)
+    - role: nvidia_container_toolkit
+      tags: [nvidia, docker, toolkit]
+
+    # Phase 11: NFS client (Stages 71–76)
+    - role: nfs_client
+      tags: [nfs, storage]
+
+    # Phase 21+: Monitoring agents (Stages 147–148, 167)
+    - role: monitoring_agents
+      tags: [monitoring, prometheus, loki]
+
+  post_tasks:
+    - name: "Final verification — GPU count"
+      shell: nvidia-smi --query-gpu=count --format=csv,noheader | head -1
+      register: final_gpu_count
+      changed_when: false
+
+    - name: "Final verification — Docker GPU access"
+      command: docker run --rm --gpus all nvidia/cuda:{{ cuda_version }}.0-base-ubuntu22.04 nvidia-smi -L
+      register: final_docker_gpu
+      changed_when: false
+
+    - name: "Final verification — NFS mount"
+      command: mountpoint -q {{ nfs_mount_point }}
+      changed_when: false
+
+    - name: "Final verification summary"
+      debug:
+        msg: |
+          === Provisioning Complete ===
+          Host:       {{ inventory_hostname }}
+          GPUs:       {{ final_gpu_count.stdout }} detected
+          Docker GPU: {{ final_docker_gpu.stdout_lines | length }} GPU(s) in Docker
+          NFS:        {{ nfs_mount_point }} mounted
+          Node Exp:   http://{{ ansible_host }}:9100/metrics
+          DCGM Exp:   http://{{ ansible_host }}:9400/metrics
+          ===============================

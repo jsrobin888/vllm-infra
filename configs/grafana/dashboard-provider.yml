@@ -1,0 +1,13 @@
+# Grafana Dashboard Provisioning — Stage 153
+apiVersion: 1
+
+providers:
+  - name: vllm-infra
+    orgId: 1
+    folder: vLLM Infrastructure
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,148 @@
+# =============================================================================
+# GitLab CI/CD Pipeline — Phase 29 (Stages 188–193)
+# =============================================================================
+
+stages:
+  - lint
+  - validate
+  - build
+  - test
+  - deploy-staging
+  - deploy-production
+
+variables:
+  ANSIBLE_FORCE_COLOR: "true"
+  DOCKER_BUILDKIT: "1"
+
+# =============================================================================
+# Stage 189: Linting & Validation
+# =============================================================================
+ansible-lint:
+  stage: lint
+  image: cytopia/ansible-lint:latest
+  script:
+    - cd ansible
+    - ansible-lint playbooks/ roles/
+  rules:
+    - changes:
+        - ansible/**/*
+
+yaml-lint:
+  stage: lint
+  image: cytopia/yamllint:latest
+  script:
+    - yamllint -d relaxed ansible/ configs/ compose/
+  rules:
+    - changes:
+        - "**/*.yml"
+        - "**/*.yaml"
+
+shellcheck:
+  stage: lint
+  image: koalaman/shellcheck-alpine:latest
+  script:
+    - find scripts/ -name "*.sh" -exec shellcheck {} +
+  rules:
+    - changes:
+        - scripts/**/*
+
+# =============================================================================
+# Stage 189: Validation
+# =============================================================================
+ansible-syntax:
+  stage: validate
+  image: ansible/ansible-runner:latest
+  script:
+    - cd ansible
+    - |
+      for playbook in playbooks/*.yml; do
+        echo "Checking: $playbook"
+        ansible-playbook --syntax-check -i inventory/hosts.yml.example "$playbook" || true
+      done
+
+docker-compose-validate:
+  stage: validate
+  image: docker/compose:latest
+  script:
+    - |
+      for dir in compose/*/; do
+        if [ -f "$dir/docker-compose.yml" ]; then
+          echo "Validating: $dir"
+          docker compose -f "$dir/docker-compose.yml" config --quiet
+        fi
+      done
+  rules:
+    - changes:
+        - compose/**/*
+
+# =============================================================================
+# Stage 88: Docker Image Build
+# =============================================================================
+build-vllm-image:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - docker build -t ${CI_REGISTRY_IMAGE}/vllm-server:${CI_COMMIT_SHORT_SHA} docker/vllm-server/
+    - docker push ${CI_REGISTRY_IMAGE}/vllm-server:${CI_COMMIT_SHORT_SHA}
+  rules:
+    - changes:
+        - docker/vllm-server/**/*
+
+# =============================================================================
+# Stage 89: Security Scanning
+# =============================================================================
+trivy-scan:
+  stage: test
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  script:
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL ${CI_REGISTRY_IMAGE}/vllm-server:${CI_COMMIT_SHORT_SHA}
+  allow_failure: true
+  rules:
+    - changes:
+        - docker/**/*
+
+# =============================================================================
+# Stage 190: Integration Tests
+# =============================================================================
+smoke-test:
+  stage: test
+  script:
+    - cd tests/smoke
+    - bash test-vllm-endpoint.sh "${STAGING_VLLM_URL:-http://staging-gpu:8000}"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# =============================================================================
+# Stage 192: Staging Deployment
+# =============================================================================
+deploy-staging:
+  stage: deploy-staging
+  script:
+    - cd ansible
+    - ansible-playbook -i inventory/staging.yml playbooks/deploy-vllm.yml
+      -e "vllm_image_tag=${CI_COMMIT_SHORT_SHA}"
+  environment:
+    name: staging
+    url: http://staging-gpu.internal:8000
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# =============================================================================
+# Stage 193: Production Deployment
+# =============================================================================
+deploy-production:
+  stage: deploy-production
+  script:
+    - cd ansible
+    - ansible-playbook -i inventory/hosts.yml playbooks/rolling-update-vllm.yml
+      -e "new_vllm_image_tag=${CI_COMMIT_TAG}"
+  environment:
+    name: production
+    url: http://vllm.gpu.internal:8000
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+  when: manual

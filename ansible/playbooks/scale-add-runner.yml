@@ -1,0 +1,100 @@
+# =============================================================================
+# Ansible Playbook: Scale — Add New GPU Runner
+# Phase 38: Auto-Scaling — Stages 113-116
+# =============================================================================
+# Provisions a new GPU runner and adds it to the fleet.
+# Usage: ansible-playbook playbooks/scale-add-runner.yml -e "target_host=gpu-runner-04"
+# =============================================================================
+---
+- name: Pre-flight — Validate new runner connectivity
+  hosts: "{{ target_host }}"
+  gather_facts: true
+
+  tasks:
+    - name: Verify connectivity
+      ansible.builtin.ping:
+
+    - name: Check Ubuntu version
+      ansible.builtin.assert:
+        that: ansible_distribution_release == 'jammy'
+        fail_msg: "Expected Ubuntu 22.04 (jammy), got {{ ansible_distribution_release }}"
+
+    - name: Check minimum system requirements
+      ansible.builtin.assert:
+        that:
+          - ansible_memtotal_mb >= 64000
+          - ansible_processor_vcpus >= 16
+        fail_msg: "Insufficient resources: {{ ansible_memtotal_mb }}MB RAM, {{ ansible_processor_vcpus }} vCPUs"
+
+- name: Provision new GPU runner
+  hosts: "{{ target_host }}"
+  become: true
+
+  roles:
+    - role: base_system
+    - role: nvidia_driver
+    - role: gpu_config
+    - role: docker_engine
+    - role: nvidia_container_toolkit
+    - role: nfs_client
+    - role: monitoring_agents
+
+  post_tasks:
+    - name: Verify GPU count matches inventory
+      ansible.builtin.command: nvidia-smi --query-gpu=count --format=csv,noheader
+      register: actual_gpu_count
+      changed_when: false
+
+    - name: Assert GPU count
+      ansible.builtin.assert:
+        that: actual_gpu_count.stdout | int == gpu_count | int
+        fail_msg: "Expected {{ gpu_count }} GPUs, found {{ actual_gpu_count.stdout }}"
+
+- name: Deploy vLLM on new runner
+  hosts: "{{ target_host }}"
+  become: true
+
+  roles:
+    - role: vllm_deploy
+
+  post_tasks:
+    - name: Wait for vLLM health
+      ansible.builtin.uri:
+        url: "http://localhost:{{ item.port }}/health"
+        timeout: 10
+      loop: "{{ models_to_serve }}"
+      register: health
+      retries: 30
+      delay: 10
+      until: health.status == 200
+
+    - name: Run smoke test
+      ansible.builtin.shell: |
+        curl -s -X POST http://localhost:{{ item.port }}/v1/chat/completions \
+          -H "Content-Type: application/json" \
+          -d '{"model":"{{ item.name }}","messages":[{"role":"user","content":"Hello"}],"max_tokens":5}' \
+          --max-time 30
+      loop: "{{ models_to_serve }}"
+      register: smoke
+      changed_when: false
+
+- name: Add to load balancer
+  hosts: load_balancers
+  become: true
+  serial: 1
+
+  tasks:
+    - name: Regenerate HAProxy config with new runner
+      ansible.builtin.include_role:
+        name: load_balancer
+        tasks_from: main
+
+    - name: Verify new runner appears in backends
+      ansible.builtin.shell: |
+        echo "show stat" | socat /var/lib/haproxy/stats/haproxy.sock stdio | grep "{{ target_host }}"
+      register: backend_check
+      changed_when: false
+
+    - name: Confirm runner is in HAProxy
+      ansible.builtin.debug:
+        msg: "{{ target_host }} successfully added to load balancer"

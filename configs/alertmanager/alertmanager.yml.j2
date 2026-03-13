@@ -1,0 +1,84 @@
+# =============================================================================
+# Alertmanager Configuration — Stage 159
+# =============================================================================
+
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'category', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'default-slack'
+
+  routes:
+    # Critical GPU/vLLM alerts → PagerDuty
+    - match:
+        severity: critical
+      receiver: 'pagerduty-critical'
+      continue: true              # Also send to Slack
+
+    # Critical alerts → Slack #alerts-critical
+    - match:
+        severity: critical
+      receiver: 'slack-critical'
+
+    # Warning alerts → Slack #alerts-warning
+    - match:
+        severity: warning
+      receiver: 'slack-warning'
+
+    # Info alerts → Slack #alerts-info
+    - match:
+        severity: info
+      receiver: 'slack-info'
+      group_wait: 5m
+      repeat_interval: 24h
+
+# Inhibition rules — suppress lower severity when higher fires
+inhibit_rules:
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: ['alertname', 'instance']
+
+receivers:
+  - name: 'default-slack'
+    slack_configs:
+      - api_url: '{{ vault_slack_webhook_url | default("https://hooks.slack.com/services/PLACEHOLDER") }}'
+        channel: '#vllm-alerts'
+        title: '{% raw %}{{ .GroupLabels.alertname }}{% endraw %}'
+        text: >-
+          {% raw %}{{ range .Alerts }}
+          *{{ .Labels.severity | toUpper }}* — {{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ if .Annotations.runbook_url }}📖 <{{ .Annotations.runbook_url }}|Runbook>{{ end }}
+          {{ end }}{% endraw %}
+
+  - name: 'slack-critical'
+    slack_configs:
+      - api_url: '{{ vault_slack_webhook_url | default("https://hooks.slack.com/services/PLACEHOLDER") }}'
+        channel: '#vllm-alerts-critical'
+        color: 'danger'
+        title: '🔴 CRITICAL: {% raw %}{{ .GroupLabels.alertname }}{% endraw %}'
+
+  - name: 'slack-warning'
+    slack_configs:
+      - api_url: '{{ vault_slack_webhook_url | default("https://hooks.slack.com/services/PLACEHOLDER") }}'
+        channel: '#vllm-alerts-warning'
+        color: 'warning'
+        title: '🟡 WARNING: {% raw %}{{ .GroupLabels.alertname }}{% endraw %}'
+
+  - name: 'slack-info'
+    slack_configs:
+      - api_url: '{{ vault_slack_webhook_url | default("https://hooks.slack.com/services/PLACEHOLDER") }}'
+        channel: '#vllm-alerts-info'
+        title: '🔵 INFO: {% raw %}{{ .GroupLabels.alertname }}{% endraw %}'
+
+  - name: 'pagerduty-critical'
+    pagerduty_configs:
+      - service_key: '{{ vault_pagerduty_service_key | default("PLACEHOLDER") }}'
+        severity: 'critical'
+        description: '{% raw %}{{ .GroupLabels.alertname }}: {{ .CommonAnnotations.summary }}{% endraw %}'

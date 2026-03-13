@@ -1,0 +1,89 @@
+---
+# =============================================================================
+# Playbook: Rolling Update vLLM
+# Phase 30: Deployment Strategies (Stages 194–198)
+# =============================================================================
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/rolling-update-vllm.yml \
+#     -e new_vllm_image_tag=v0.8.4
+# =============================================================================
+
+- name: "Rolling Update vLLM Fleet"
+  hosts: gpu_runners
+  become: true
+  serial: 1                        # One runner at a time
+
+  vars:
+    new_vllm_image_tag: "{{ vllm_image_tag }}"
+    drain_wait_seconds: 30
+    health_check_retries: 40
+    health_check_delay: 15
+
+  tasks:
+    # -- Stage 196: Drain runner from LB --
+    - name: "Stage 196 | Drain — mark runner as unhealthy for LB"
+      uri:
+        url: "http://{{ item.1 }}:{{ haproxy_admin_port | default(9999) }}/admin"
+        method: POST
+        body: "action=drain&backend=vllm&server={{ inventory_hostname }}"
+        status_code: [200, 404]
+      delegate_to: "{{ item.0 }}"
+      loop: "{{ groups['load_balancers'] | product(['localhost']) | list }}"
+      ignore_errors: true
+
+    - name: "Stage 196 | Wait for in-flight requests to complete"
+      pause:
+        seconds: "{{ drain_wait_seconds }}"
+
+    # -- Stage 196: Pull new image --
+    - name: "Stage 196 | Pull new vLLM image"
+      community.docker.docker_image:
+        name: "{{ vllm_image }}:{{ new_vllm_image_tag }}"
+        source: pull
+
+    # -- Stage 196: Update and restart --
+    - name: "Stage 196 | Update image tag"
+      set_fact:
+        vllm_image_tag: "{{ new_vllm_image_tag }}"
+
+    - name: "Stage 196 | Recreate vLLM containers"
+      include_role:
+        name: vllm_deploy
+
+    # -- Stage 196: Verify health --
+    - name: "Stage 196 | Wait for containers to become healthy"
+      command: >
+        docker inspect --format='{% raw %}{{.State.Health.Status}}{% endraw %}' vllm-{{ item.name | lower | replace('.', '-') | regex_replace('[^a-z0-9-]', '-') }}
+      register: health_status
+      until: health_status.stdout == "healthy"
+      retries: "{{ health_check_retries }}"
+      delay: "{{ health_check_delay }}"
+      loop: "{{ models_to_serve }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # -- Stage 196: Smoke test --
+    - name: "Stage 196 | Smoke test model endpoints"
+      uri:
+        url: "http://localhost:{{ item.port }}/v1/models"
+        method: GET
+        status_code: 200
+        timeout: 30
+      loop: "{{ models_to_serve }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # -- Stage 196: Re-enable in LB --
+    - name: "Stage 196 | Re-enable runner in LB"
+      uri:
+        url: "http://{{ item.1 }}:{{ haproxy_admin_port | default(9999) }}/admin"
+        method: POST
+        body: "action=enable&backend=vllm&server={{ inventory_hostname }}"
+        status_code: [200, 404]
+      delegate_to: "{{ item.0 }}"
+      loop: "{{ groups['load_balancers'] | product(['localhost']) | list }}"
+      ignore_errors: true
+
+    - name: "Runner {{ inventory_hostname }} updated to {{ new_vllm_image_tag }}"
+      debug:
+        msg: "✅ {{ inventory_hostname }} updated successfully. Moving to next runner."

@@ -1,0 +1,221 @@
+# =============================================================================
+# Prometheus Alert Rules — Stages 159–165
+# =============================================================================
+
+groups:
+  # =========================================================================
+  # Stage 160: GPU Alerts
+  # =========================================================================
+  - name: gpu_alerts
+    rules:
+      - alert: GPUTemperatureHigh
+        expr: DCGM_FI_DEV_GPU_TEMP > 85
+        for: 5m
+        labels:
+          severity: warning
+          category: gpu
+        annotations:
+          summary: "GPU temperature high on {{ $labels.instance }}"
+          description: "GPU {{ $labels.gpu }} on {{ $labels.instance }} is at {{ $value }}°C (threshold: 85°C)"
+          runbook_url: "https://wiki.gpu.internal/runbooks/gpu-temperature-high"
+
+      - alert: GPUTemperatureCritical
+        expr: DCGM_FI_DEV_GPU_TEMP > 92
+        for: 2m
+        labels:
+          severity: critical
+          category: gpu
+        annotations:
+          summary: "GPU temperature CRITICAL on {{ $labels.instance }}"
+          description: "GPU {{ $labels.gpu }} at {{ $value }}°C — thermal throttling imminent"
+
+      - alert: GPUMemoryExhausted
+        expr: (DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_FREE) > 0.95
+        for: 5m
+        labels:
+          severity: warning
+          category: gpu
+        annotations:
+          summary: "GPU memory >95% on {{ $labels.instance }}"
+
+      - alert: GPUUtilizationLow
+        expr: DCGM_FI_DEV_GPU_UTIL < 5
+        for: 30m
+        labels:
+          severity: info
+          category: efficiency
+        annotations:
+          summary: "GPU {{ $labels.gpu }} idle on {{ $labels.instance }} for 30+ min"
+          description: "Consider consolidating workloads or shutting down idle runners"
+
+      - alert: GPUECCErrors
+        expr: DCGM_FI_DEV_ECC_DBE_VOL_TOTAL > 0
+        for: 1m
+        labels:
+          severity: critical
+          category: gpu
+        annotations:
+          summary: "Uncorrected ECC errors on GPU {{ $labels.gpu }} ({{ $labels.instance }})"
+          description: "Double-bit ECC error detected. GPU may need replacement."
+          runbook_url: "https://wiki.gpu.internal/runbooks/gpu-ecc-error"
+
+      - alert: GPUPowerOverLimit
+        expr: DCGM_FI_DEV_POWER_USAGE > DCGM_FI_DEV_POWER_LIMIT * 1.05
+        for: 5m
+        labels:
+          severity: warning
+          category: power
+        annotations:
+          summary: "GPU power exceeding limit on {{ $labels.instance }}"
+
+      - alert: GPUFallenOffBus
+        expr: up{job="dcgm"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: gpu
+        annotations:
+          summary: "DCGM exporter down on {{ $labels.instance }} — GPU may have fallen off bus"
+
+  # =========================================================================
+  # Stage 161: vLLM Alerts
+  # =========================================================================
+  - name: vllm_alerts
+    rules:
+      - alert: VLLMHighLatency
+        expr: histogram_quantile(0.99, rate(vllm:request_latency_seconds_bucket[5m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+          category: vllm
+        annotations:
+          summary: "vLLM p99 latency >5s on {{ $labels.instance }}"
+          description: "Model {{ $labels.model }} p99 latency: {{ $value | humanize }}s"
+
+      - alert: VLLMHighErrorRate
+        expr: rate(vllm:request_success_total{status!="200"}[5m]) / rate(vllm:request_success_total[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          category: vllm
+        annotations:
+          summary: "vLLM error rate >1% on {{ $labels.instance }}"
+
+      - alert: VLLMDown
+        expr: up{job="vllm"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: vllm
+        annotations:
+          summary: "vLLM instance down: {{ $labels.instance }} ({{ $labels.model }})"
+          runbook_url: "https://wiki.gpu.internal/runbooks/vllm-down"
+
+      - alert: VLLMQueueBacklog
+        expr: vllm:num_requests_waiting > 100
+        for: 5m
+        labels:
+          severity: warning
+          category: vllm
+        annotations:
+          summary: "vLLM request queue backlog on {{ $labels.instance }}"
+          description: "{{ $value }} requests waiting in queue"
+
+      - alert: VLLMOOMKill
+        expr: increase(container_oom_events_total{name=~"vllm.*"}[5m]) > 0
+        labels:
+          severity: critical
+          category: vllm
+        annotations:
+          summary: "vLLM container OOM killed on {{ $labels.instance }}"
+
+  # =========================================================================
+  # Stage 162: Storage Alerts
+  # =========================================================================
+  - name: storage_alerts
+    rules:
+      - alert: StorageDiskUsageHigh
+        expr: (node_filesystem_size_bytes{mountpoint="/srv/models"} - node_filesystem_avail_bytes{mountpoint="/srv/models"}) / node_filesystem_size_bytes{mountpoint="/srv/models"} > 0.80
+        for: 10m
+        labels:
+          severity: warning
+          category: storage
+        annotations:
+          summary: "Model storage >80% on {{ $labels.instance }}"
+
+      - alert: StorageDiskUsageCritical
+        expr: (node_filesystem_size_bytes{mountpoint="/srv/models"} - node_filesystem_avail_bytes{mountpoint="/srv/models"}) / node_filesystem_size_bytes{mountpoint="/srv/models"} > 0.90
+        for: 5m
+        labels:
+          severity: critical
+          category: storage
+        annotations:
+          summary: "Model storage >90% on {{ $labels.instance }}"
+
+      - alert: NFSMountStale
+        expr: node_nfs_requests_total{method="null"} == 0 and node_filesystem_readonly{mountpoint="/mnt/models"} == 1
+        for: 2m
+        labels:
+          severity: critical
+          category: storage
+        annotations:
+          summary: "NFS mount may be stale on {{ $labels.instance }}"
+
+      - alert: NFSHighLatency
+        expr: rate(node_nfs_rpc_retransmissions_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          category: storage
+        annotations:
+          summary: "High NFS retransmissions on {{ $labels.instance }}"
+
+  # =========================================================================
+  # Stage 163: System Alerts
+  # =========================================================================
+  - name: system_alerts
+    rules:
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 15m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "CPU usage >90% on {{ $labels.instance }}"
+
+      - alert: HighMemoryUsage
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "Memory usage >85% on {{ $labels.instance }}"
+
+      - alert: HighSwapUsage
+        expr: node_memory_SwapFree_bytes / node_memory_SwapTotal_bytes < 0.5
+        for: 10m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "Swap usage >50% on {{ $labels.instance }}"
+
+      - alert: DiskIOSaturation
+        expr: rate(node_disk_io_time_seconds_total[5m]) > 0.9
+        for: 15m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "Disk I/O saturated on {{ $labels.instance }}"
+
+      - alert: NodeDown
+        expr: up{job="node"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          category: system
+        annotations:
+          summary: "Node {{ $labels.instance }} is unreachable"

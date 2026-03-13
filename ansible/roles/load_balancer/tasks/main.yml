@@ -1,0 +1,114 @@
+# =============================================================================
+# Ansible Role: HAProxy Load Balancer
+# Phase 28-29: Load Balancing — Stages 141-146
+# =============================================================================
+---
+- name: Install HAProxy
+  ansible.builtin.apt:
+    name:
+      - haproxy={{ haproxy_version | default('2.8.*') }}
+      - keepalived
+      - hatop
+    state: present
+    update_cache: true
+
+- name: Hold HAProxy version
+  ansible.builtin.dpkg_selections:
+    name: haproxy
+    selection: hold
+
+- name: Create HAProxy directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: haproxy
+    group: haproxy
+    mode: "0755"
+  loop:
+    - /etc/haproxy/certs
+    - /etc/haproxy/maps
+    - /etc/haproxy/errors
+    - /var/lib/haproxy/stats
+
+- name: Deploy HAProxy configuration
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: haproxy
+    group: haproxy
+    mode: "0640"
+    validate: "haproxy -c -f %s"
+  notify: Reload HAProxy
+
+- name: Deploy API key map file
+  ansible.builtin.template:
+    src: api-keys.map.j2
+    dest: /etc/haproxy/maps/api-keys.map
+    owner: haproxy
+    group: haproxy
+    mode: "0600"
+  notify: Reload HAProxy
+
+- name: Deploy custom error pages
+  ansible.builtin.template:
+    src: "{{ item }}.http.j2"
+    dest: "/etc/haproxy/errors/{{ item }}.http"
+    owner: haproxy
+    group: haproxy
+    mode: "0644"
+  loop:
+    - 429
+    - 503
+  notify: Reload HAProxy
+
+- name: Deploy keepalived configuration
+  ansible.builtin.template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart keepalived
+  when: haproxy_vip is defined
+
+- name: Enable and start HAProxy
+  ansible.builtin.systemd:
+    name: haproxy
+    enabled: true
+    state: started
+
+- name: Enable and start keepalived
+  ansible.builtin.systemd:
+    name: keepalived
+    enabled: true
+    state: started
+  when: haproxy_vip is defined
+
+- name: Verify HAProxy is listening
+  ansible.builtin.wait_for:
+    port: "{{ haproxy_frontend_port | default(443) }}"
+    timeout: 30
+
+- name: Check HAProxy stats endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ haproxy_stats_port | default(8404) }}/stats"
+    return_content: false
+    status_code: [200, 401]
+
+# --- HAProxy log rotation ---
+- name: Configure HAProxy log rotation
+  ansible.builtin.copy:
+    content: |
+      /var/log/haproxy.log {
+          daily
+          rotate 14
+          compress
+          delaycompress
+          missingok
+          notifempty
+          postrotate
+              /bin/systemctl reload rsyslog > /dev/null 2>&1 || true
+          endscript
+      }
+    dest: /etc/logrotate.d/haproxy
+    mode: "0644"
